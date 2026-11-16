@@ -36,3 +36,14 @@ A separate 2,000,000-byte trial (seed 0, same channel settings, 10,000 transmitt
 symbols) failed within its budget: 5,624 unique accepted symbols recovered 3,846
 of 4,762 source blocks. This demonstrates why small-fixture success does not
 establish large-file recovery efficiency. These results are simulations only.
+
+## UI and icon revision
+
+Updated native home screen, selectable frame-rate chips, transfer-screen styling,
+system-bar/cutout insets and a scrollable home layout. Added an adaptive vector
+launcher icon with a monochrome layer for Android 13+ themed icons. Navigation-bar
+theme attributes are version-qualified to retain API 26 compatibility.
+
+`testDebugUnitTest lintDebug assembleDebug` succeeded: all 11 Kotlin tests passed;
+lint reported zero errors and 12 warnings. No phone or emulator was connected,
+so the rendered UI and launcher appearance still need a physical-device check.

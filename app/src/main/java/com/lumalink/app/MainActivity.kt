@@ -3,6 +3,11 @@ package com.lumalink.app
 import android.Manifest
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
+import android.graphics.Color
+import android.graphics.Typeface
+import android.graphics.drawable.GradientDrawable
+import android.graphics.drawable.RippleDrawable
+import android.content.res.ColorStateList
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -18,6 +23,9 @@ import androidx.camera.core.ImageAnalysis
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.EncodeHintType
 import com.google.zxing.qrcode.QRCodeWriter
@@ -89,7 +97,20 @@ class MainActivity : ComponentActivity() {
     private val permission = registerForActivityResult(ActivityResultContracts.RequestPermission()) {
         if (it) receive() else toast("Camera permission required")
     }
-    override fun onCreate(savedInstanceState: Bundle?) { super.onCreate(savedInstanceState); home() }
+    private val ink = Color.rgb(20, 43, 48)
+    private val muted = Color.rgb(87, 110, 112)
+    private val paper = Color.rgb(246, 248, 244)
+    private val mint = Color.rgb(207, 245, 222)
+    private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        WindowCompat.setDecorFitsSystemWindows(window, false)
+        WindowCompat.getInsetsController(window, window.decorView).apply {
+            isAppearanceLightStatusBars = true
+            isAppearanceLightNavigationBars = true
+        }
+        home()
+    }
     private fun stop() {
         session++
         work?.cancel(true); work = null
@@ -98,31 +119,115 @@ class MainActivity : ComponentActivity() {
         provider?.unbindAll()
         window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
     }
-    private fun layout() {
+    private fun layout(scrollable: Boolean = false) {
         stop()
-        root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER_HORIZONTAL; setPadding(20,28,20,16) }
-        setContentView(root)
+        root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(paper)
+        }
+        val host = if (scrollable) ScrollView(this).apply {
+            isFillViewport = true
+            setBackgroundColor(paper)
+            addView(root, FrameLayout.LayoutParams(-1, -2))
+        } else root
+        ViewCompat.setOnApplyWindowInsetsListener(host) { view, insets ->
+            val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout())
+            view.setPadding(dp(24) + bars.left, dp(20) + bars.top, dp(24) + bars.right, dp(20) + bars.bottom)
+            WindowInsetsCompat.CONSUMED
+        }
+        setContentView(host)
+        ViewCompat.requestApplyInsets(host)
     }
-    private fun title(value: String) { root.addView(TextView(this).apply { text = value; textSize = 22f; gravity = Gravity.CENTER }) }
-    private fun button(value: String, action: () -> Unit) { root.addView(Button(this).apply { text = value; setOnClickListener { action() } }) }
+    private fun rounded(color: Int, radius: Int = 22) = GradientDrawable().apply {
+        setColor(color); cornerRadius = dp(radius).toFloat()
+    }
+    private fun label(value: String, size: Float = 15f, color: Int = ink, bold: Boolean = false) = TextView(this).apply {
+        text = value; textSize = size; setTextColor(color)
+        if (bold) setTypeface(typeface, Typeface.BOLD)
+        setLineSpacing(dp(3).toFloat(), 1f)
+    }
+    private fun gap(height: Int) { root.addView(android.view.View(this), LinearLayout.LayoutParams(1, dp(height))) }
+    private fun title(value: String) {
+        root.addView(label(value, 25f, bold = true).apply { setPadding(0, dp(8), 0, dp(20)) })
+    }
+    private fun button(value: String, action: () -> Unit) {
+        root.addView(Button(this).apply {
+            text = value; textSize = 14f; isAllCaps = false
+            setTextColor(Color.WHITE); backgroundTintList = ColorStateList.valueOf(ink)
+            minHeight = dp(56); setOnClickListener { action() }
+        }, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(12) })
+    }
+    private fun actionCard(name: String, description: String, dark: Boolean, action: () -> Unit) {
+        val foreground = if (dark) Color.WHITE else ink
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(22), dp(20), dp(22), dp(20))
+            background = RippleDrawable(ColorStateList.valueOf(0x22349676), rounded(if (dark) ink else mint), null)
+            isClickable = true; isFocusable = true; minimumHeight = dp(108)
+            setOnClickListener { action() }
+            contentDescription = "$name. $description"
+        }
+        val copy = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        copy.addView(label(name, 22f, foreground, true))
+        copy.addView(label(description, 14f, if (dark) Color.rgb(187, 210, 207) else muted).apply { setPadding(0, dp(5), dp(12), 0) })
+        card.addView(copy, LinearLayout.LayoutParams(0, -2, 1f))
+        card.addView(label(if (dark) "↓" else "↗", 30f, foreground).apply { importantForAccessibility = android.view.View.IMPORTANT_FOR_ACCESSIBILITY_NO })
+        root.addView(card, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(12) })
+    }
     private fun toast(value: String) = Toast.makeText(this, value, Toast.LENGTH_LONG).show()
     private fun home() {
-        layout(); title("LumaLink - offline optical transfer")
-        val rates = listOf(6, 15, 30, 60)
-        root.addView(Spinner(this).apply {
-            adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item, rates.map { "$it FPS requested" })
-            setSelection(rates.indexOf(requestedFps))
-            onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
-                override fun onNothingSelected(parent: AdapterView<*>?) = Unit
-                override fun onItemSelected(parent: AdapterView<*>?, view: android.view.View?, position: Int, id: Long) { requestedFps = rates[position] }
-            }
-        })
-        button("SEND FILE") { pick.launch("*/*") }
-        button("RECEIVE FILE") {
+        layout(scrollable = true)
+        val brand = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
+        brand.addView(ImageView(this).apply {
+            setImageResource(R.drawable.ic_launcher_foreground)
+            background = rounded(ink, 14)
+            contentDescription = null
+        }, LinearLayout.LayoutParams(dp(48), dp(48)))
+        brand.addView(label("LumaLink", 23f, bold = true), LinearLayout.LayoutParams(0, -2, 1f).apply { leftMargin = dp(12) })
+        brand.addView(label("OFFLINE", 10f, ink, true).apply { background = rounded(mint, 12); setPadding(dp(10), dp(7), dp(10), dp(7)); letterSpacing = .1f })
+        root.addView(brand)
+        gap(32)
+        root.addView(label("Files move.\nThrough light.", 34f, bold = true).apply { setLineSpacing(0f, 1f) })
+        gap(12)
+        root.addView(label("A screen. A camera. A direct connection.", 15f, muted))
+        gap(28)
+        actionCard("Send a file", "Choose a file to show as animated QR codes", false) { pick.launch("*/*") }
+        actionCard("Receive a file", "Point this camera at the sending phone", true) {
             if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) receive()
             else permission.launch(Manifest.permission.CAMERA)
         }
-        root.addView(TextView(this).apply { text = "Install LumaLink on both phones. No network, Bluetooth or pairing.\nExperimental QR mode does not achieve 190 KB/s. Start at 6 FPS." })
+        gap(18)
+        root.addView(label("DISPLAY RATE", 11f, muted, true).apply { letterSpacing = .14f })
+        gap(12)
+        val rates = listOf(6, 15, 30, 60)
+        val choices = LinearLayout(this)
+        val chips = mutableListOf<TextView>()
+        fun updateRates() {
+            chips.forEachIndexed { index, chip ->
+                val selected = rates[index] == requestedFps
+                chip.isSelected = selected
+                chip.setTextColor(if (selected) Color.WHITE else ink)
+                chip.background = rounded(if (selected) ink else Color.rgb(232, 237, 230), 14)
+                chip.contentDescription = "${rates[index]} frames per second requested${if (selected) ", selected" else ""}"
+            }
+        }
+        rates.forEachIndexed { index, rate ->
+            val chip = label("$rate FPS", 14f, bold = true).apply {
+                gravity = Gravity.CENTER; minHeight = dp(52); isClickable = true; isFocusable = true
+                setOnClickListener { requestedFps = rate; updateRates() }
+            }
+            chips.add(chip)
+            choices.addView(chip, LinearLayout.LayoutParams(0, -2, 1f).apply { if (index > 0) leftMargin = dp(8) })
+        }
+        updateRates(); root.addView(choices)
+        gap(10)
+        root.addView(label("Start at 6 FPS. Higher rates depend on both phones.", 12f, muted))
+        gap(28)
+        root.addView(label("Offline by design", 15f, bold = true))
+        gap(6)
+        root.addView(label("No internet, Bluetooth or pairing. Install LumaLink on both phones to transfer.", 13f, muted))
+        gap(14)
+        root.addView(label("Experimental QR mode · 190 KB/s is not yet supported.", 12f, muted))
     }
     private fun send(sender: Sender) {
         layout(); window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
@@ -130,7 +235,7 @@ class MainActivity : ComponentActivity() {
         title("Sending: ${sender.name}")
         val qr = ImageView(this).apply { setBackgroundColor(android.graphics.Color.WHITE); scaleType = ImageView.ScaleType.FIT_CENTER }
         root.addView(qr, LinearLayout.LayoutParams(-1,0,1f))
-        val status = TextView(this); root.addView(status)
+        val status = label("Preparing QR frames…", 13f, muted).apply { setPadding(0, dp(16), 0, dp(4)) }; root.addView(status)
         button("STOP") { home() }
         val queue = ArrayBlockingQueue<Pair<Int, Bitmap>>(2)
         work = worker.submit {
@@ -175,7 +280,7 @@ class MainActivity : ComponentActivity() {
         val token = session
         title("Point camera at sender")
         val view = PreviewView(this); root.addView(view, LinearLayout.LayoutParams(-1,0,1f))
-        val status = TextView(this); root.addView(status)
+        val status = label("Waiting for the first QR frame…", 13f, muted).apply { setPadding(0, dp(16), 0, dp(4)) }; root.addView(status)
         button("STOP") { home() }
         val receiver = Receiver()
         val decoder = FrameDecoder()

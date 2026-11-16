@@ -22,6 +22,11 @@ build and publishes the debug APK as a workflow artifact. Install
 
 ## Use
 
+The home screen has separate send/receive cards and 6/15/30/60 FPS choices.
+The layout respects system bars and display cutouts; the home screen scrolls on
+small displays. The adaptive QR/light-beam launcher icon also supports Android
+13 themed icons.
+
 1. Start with a local 1-10 KB file and the default 6 requested FPS.
 2. Tap SEND FILE on one phone and RECEIVE FILE on the other.
 3. Keep the complete QR and its white border visible, with steady focus and no glare.

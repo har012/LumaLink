@@ -1,0 +1,13 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp" android:height="108dp"
+    android:viewportWidth="108" android:viewportHeight="108">
+    <!-- QR finder corners and a beam of light, kept inside the adaptive safe zone. -->
+    <path android:fillColor="#FFFFFF"
+        android:pathData="M28,28h22v6H34v16h-6zM80,80H58v-6h16V58h6z" />
+    <path android:fillColor="#CFF5DE"
+        android:pathData="M39,39h9v9h-9zM60,60h9v9h-9zM55,30h7v7h-7zM71,39h7v7h-7zM30,61h7v7h-7zM41,73h7v7h-7z" />
+    <path android:fillColor="#CFF5DE"
+        android:pathData="M42,57L59,40l9,9 -17,17z" />
+    <path android:fillColor="#FFFFFF"
+        android:pathData="M57,40h11v11z" />
+</vector>
