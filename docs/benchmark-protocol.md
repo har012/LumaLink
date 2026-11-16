@@ -8,7 +8,12 @@ Run `./gradlew testDebugUnitTest lintDebug assembleDebug` with JDK 17 and SDK 35
 CI runs the same checks. Install on API 26, 28, 29 and a current Android device.
 Test camera denial/unavailability, STOP during camera startup, rapid send/receive
 switching, background/foreground, rotation, picker cancellation, empty and oversized
-input, Unicode filenames, save cancellation and failing document providers.
+input and Unicode filenames. Test automatic image/video/audio/other routing, duplicate
+filenames, unavailable/full storage, failed-write cleanup and retry. On API 26/28,
+test storage permission grant/denial and retry after granting it in Settings. On API
+29+, verify no storage permission is requested. Confirm gallery/music visibility for
+valid media and ensure existing files are never overwritten. Unknown extensions
+must go to Download/LumaLink. The completion screen must show the actual saved name.
 Sessions intentionally stop when the activity leaves the foreground; restart from
 HOME. A rotation/process death can lose an unsaved verified file; receive again.
 

@@ -44,22 +44,42 @@ class MainActivity : ComponentActivity() {
     private var frameCallback: Choreographer.FrameCallback? = null
     @Volatile private var session = 0L
     private lateinit var root: LinearLayout
-    private var pendingSave: ByteArray? = null
+    private var pendingSave: Pair<ByteArray, String>? = null
+    private val saveExecutor = Executors.newSingleThreadExecutor()
     private var requestedFps = 6
 
-    private val saveDocument = registerForActivityResult(ActivityResultContracts.CreateDocument("application/octet-stream")) { uri ->
-        val data = pendingSave
+    private val storagePermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        val pending = pendingSave ?: return@registerForActivityResult
+        if (granted) saveVerified(pending.first, pending.second)
+        else {
+            layout(); title("File verified; storage permission needed")
+            root.addView(label("Allow storage access in app settings to save automatically on Android 8–9.", 15f, muted))
+            button("Retry saving") { requestSave(pending.first, pending.second) }
+            button("Discard and go home") { pendingSave = null; home() }
+        }
+    }
+    private fun requestSave(data: ByteArray, name: String) {
+        stop()
+        pendingSave = data to name
+        if (android.os.Build.VERSION.SDK_INT <= 28 &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
+            storagePermission.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+        } else saveVerified(data, name)
+    }
+    private fun saveVerified(data: ByteArray, name: String) {
         pendingSave = null
-        if (uri == null || data == null) { home(); return@registerForActivityResult }
         layout(); title("Saving verified file...")
-        val token = session
-        work = worker.submit {
-            val result = runCatching { contentResolver.openOutputStream(uri, "w")?.use { it.write(data) } ?: error("Cannot open document") }
+        val saveScreen = root
+        val appContext = applicationContext
+        // Finish an in-progress disk write even if the activity goes into the background.
+        saveExecutor.submit {
+            val result = runCatching { ReceivedFileWriter(appContext).save(data, name) }
             main.post {
-                if (token != session) return@post
+                if (root !== saveScreen || isDestroyed) return@post
                 layout()
                 title(if (result.isSuccess) "File saved and SHA-256 verified" else "Save failed")
-                root.addView(TextView(this).apply { text = result.exceptionOrNull()?.message ?: "${data.size} bytes saved" })
+                root.addView(label(result.fold({ "Saved to $it\n${data.size} bytes" }, { it.message ?: "Storage unavailable" })))
+                if (result.isFailure) button("Retry saving") { requestSave(data, name) }
                 button("HOME") { home() }
             }
         }
@@ -315,8 +335,7 @@ class MainActivity : ComponentActivity() {
                                 status.text = message
                                 if (failure != null) { layout(); title(failure); button("RETRY") { receive() }; button("HOME") { home() } }
                                 else if (result != null) {
-                                    stop(); pendingSave = result
-                                    saveDocument.launch(receiver.filename)
+                                    requestSave(result, receiver.filename)
                                 }
                             }
                         }
@@ -330,5 +349,5 @@ class MainActivity : ComponentActivity() {
         }, ContextCompat.getMainExecutor(this))
     }
     override fun onStop() { stop(); super.onStop() }
-    override fun onDestroy() { stop(); worker.shutdownNow(); cameraExecutor.shutdownNow(); super.onDestroy() }
+    override fun onDestroy() { stop(); worker.shutdownNow(); cameraExecutor.shutdownNow(); saveExecutor.shutdown(); super.onDestroy() }
 }

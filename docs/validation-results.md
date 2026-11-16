@@ -47,3 +47,18 @@ theme attributes are version-qualified to retain API 26 compatibility.
 `testDebugUnitTest lintDebug assembleDebug` succeeded: all 11 Kotlin tests passed;
 lint reported zero errors and 12 warnings. No phone or emulator was connected,
 so the rendered UI and launcher appearance still need a physical-device check.
+
+## Automatic saving revision
+
+Verified files now route by extension into Pictures/LumaLink, Movies/LumaLink,
+Music/LumaLink or Download/LumaLink. API 29+ uses pending MediaStore entries;
+API 26–28 requests legacy write permission and uses unique public file paths.
+Failed writes are cleaned up and expose a retry action. File writes continue
+through activity backgrounding. Process death recovery remains unsupported.
+
+`testDebugUnitTest lintDebug assembleDebug` passed: 13 Kotlin tests, zero test
+failures and zero lint errors (12 warnings). New tests cover type routing,
+case-insensitive extensions, unsafe filenames and unknown-type fallback. APK
+inspection confirmed WRITE_EXTERNAL_STORAGE has maxSdkVersion 28; there are no
+Internet or Bluetooth permissions. Physical MediaStore/legacy storage behavior,
+permission denial, low storage, collisions and gallery indexing remain device gates.

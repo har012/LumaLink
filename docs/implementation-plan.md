@@ -12,7 +12,7 @@ No existing GitHub implementation was available; har012/LumaLink was empty.
 | Empty ID resets state | Codec.kt explicit receiver states and UUID validation |
 | Corrupt reconstruction stalls forever | Codec.kt integrity/contradiction checks and terminal failure; MainActivity.kt retry UI |
 | STOP leaves camera bound/stale callbacks | MainActivity.kt cancellation, session tokens and unbinding |
-| UI-thread unbounded I/O and API-29-only save | MainActivity.kt bounded background input and CreateDocument output |
+| UI-thread unbounded I/O and API-29-only save | MainActivity.kt bounded background input; ReceivedFileWriter.kt automatic MediaStore/legacy output and FileDestination.kt type routing |
 | Sequential render-plus-delay pacing | MainActivity.kt two-entry encoder queue and Choreographer pacing |
 | RGB conversion and per-image reader allocation | FrameDecoder.kt and LuminancePlane.kt with reusable luminance buffer |
 | No regression coverage | CodecTest.kt and LuminancePlaneTest.kt |

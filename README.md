@@ -3,7 +3,8 @@
 Experimental Android-to-Android optical file transfer. One phone displays QR
 symbols; the other decodes them with its camera. Both phones require LumaLink.
 There is no pairing, return acknowledgement, network transport or Bluetooth.
-The application source manifest requests only camera permission.
+The app uses camera permission. Android 8–9 additionally requires storage permission
+for automatic saving; that permission is capped at API 28 and is not used on Android 10+.
 
 ## Build
 
@@ -30,7 +31,9 @@ small displays. The adaptive QR/light-beam launcher icon also supports Android
 1. Start with a local 1-10 KB file and the default 6 requested FPS.
 2. Tap SEND FILE on one phone and RECEIVE FILE on the other.
 3. Keep the complete QR and its white border visible, with steady focus and no glare.
-4. After SHA-256 verification, choose where to save using the system document picker.
+4. After SHA-256 verification, the file saves automatically to the matching LumaLink
+   folder: images → Pictures, videos → Movies, audio → Music, everything else → Download.
+   The completion screen shows the saved path. Android 8–9 may ask for storage permission.
 5. Stop the sender manually. Try higher requested rates only while measuring acceptance.
 
 Leaving the foreground stops active work. Return HOME and restart after interruption.
@@ -51,8 +54,15 @@ Use local document providers for a fully offline workflow.
 - Receiver decodes luminance with reusable buffers/readers, respecting crop, stride
   and rotation. It reports analyzed, decoded and uniquely accepted packet rates.
 - Session tokens prevent stale UI callbacks; STOP cancels encoding and unbinds camera.
-- File size is bounded during background reading. Saving runs off the UI thread via
-  the document picker, including on API 26-28; it no longer uses API-29-only Downloads.
+- File size is bounded during background reading. Verified files save off the UI
+  thread into type-specific public LumaLink folders. Android 10+ uses MediaStore;
+  Android 8–9 uses permission-protected shared storage and media scanning. Duplicate
+  filenames do not overwrite existing files; failed writes are cleaned up.
+
+Automatic routing uses common filename extensions (case-insensitive), not content
+inspection. Unknown types go to Download/LumaLink. There is no save-location picker.
+Saving errors keep a Retry saving action; denying legacy storage permission does
+not silently discard the verified file. Unsaved files are not persisted across process death.
 
 ## Performance and reliability limits
 
