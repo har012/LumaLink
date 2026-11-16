@@ -62,3 +62,20 @@ case-insensitive extensions, unsafe filenames and unknown-type fallback. APK
 inspection confirmed WRITE_EXTERNAL_STORAGE has maxSdkVersion 28; there are no
 Internet or Bluetooth permissions. Physical MediaStore/legacy storage behavior,
 permission denial, low storage, collisions and gallery indexing remain device gates.
+
+## Receiver formatting fix and dark UI
+
+The receiver previously interpolated its percentage into a String.format template.
+At zero progress, the resulting `0% | ...` text treated the percent sign as a format
+conversion and threw UnknownFormatConversionException (`Conversion = '|'`). This
+could happen even before a QR was detected. TransferStatus now uses a constant
+template with `%d%%` and passes progress as an argument. Regression tests cover
+0, 1, 50 and 100 percent, plus zero elapsed time.
+
+Camera/analysis exceptions are logged and show a persistent retry screen. The home
+and transfer screens now use a navy/lime palette with a decorative optical-link
+illustration. System bar appearance is configured for the dark background.
+
+All 15 Kotlin tests passed; lint completed with zero errors and 14 warnings, and
+the debug APK built successfully. Physical receiving and the redesigned layout
+still need a phone check; no phone was connected for this validation.

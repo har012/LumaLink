@@ -1,6 +1,6 @@
 <resources>
     <style name="Theme.LumaLink" parent="Theme.LumaLink.Base">
-        <item name="android:navigationBarColor">#F6F8F4</item>
-        <item name="android:windowLightNavigationBar">true</item>
+        <item name="android:navigationBarColor">#0A0E18</item>
+        <item name="android:windowLightNavigationBar">false</item>
     </style>
 </resources>

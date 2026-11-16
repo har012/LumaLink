@@ -117,17 +117,18 @@ class MainActivity : ComponentActivity() {
     private val permission = registerForActivityResult(ActivityResultContracts.RequestPermission()) {
         if (it) receive() else toast("Camera permission required")
     }
-    private val ink = Color.rgb(20, 43, 48)
-    private val muted = Color.rgb(87, 110, 112)
-    private val paper = Color.rgb(246, 248, 244)
-    private val mint = Color.rgb(207, 245, 222)
+    private val ink = Color.rgb(238, 242, 250)
+    private val muted = Color.rgb(153, 166, 190)
+    private val paper = Color.rgb(10, 14, 24)
+    private val mint = Color.rgb(185, 255, 101)
+    private val panel = Color.rgb(24, 32, 49)
     private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         WindowCompat.setDecorFitsSystemWindows(window, false)
         WindowCompat.getInsetsController(window, window.decorView).apply {
-            isAppearanceLightStatusBars = true
-            isAppearanceLightNavigationBars = true
+            isAppearanceLightStatusBars = false
+            isAppearanceLightNavigationBars = false
         }
         home()
     }
@@ -163,7 +164,7 @@ class MainActivity : ComponentActivity() {
     }
     private fun label(value: String, size: Float = 15f, color: Int = ink, bold: Boolean = false) = TextView(this).apply {
         text = value; textSize = size; setTextColor(color)
-        if (bold) setTypeface(typeface, Typeface.BOLD)
+        if (bold) typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
         setLineSpacing(dp(3).toFloat(), 1f)
     }
     private fun gap(height: Int) { root.addView(android.view.View(this), LinearLayout.LayoutParams(1, dp(height))) }
@@ -173,23 +174,23 @@ class MainActivity : ComponentActivity() {
     private fun button(value: String, action: () -> Unit) {
         root.addView(Button(this).apply {
             text = value; textSize = 14f; isAllCaps = false
-            setTextColor(Color.WHITE); backgroundTintList = ColorStateList.valueOf(ink)
+            setTextColor(paper); backgroundTintList = ColorStateList.valueOf(mint)
             minHeight = dp(56); setOnClickListener { action() }
         }, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(12) })
     }
     private fun actionCard(name: String, description: String, dark: Boolean, action: () -> Unit) {
-        val foreground = if (dark) Color.WHITE else ink
+        val foreground = if (dark) ink else paper
         val card = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
             setPadding(dp(22), dp(20), dp(22), dp(20))
-            background = RippleDrawable(ColorStateList.valueOf(0x22349676), rounded(if (dark) ink else mint), null)
-            isClickable = true; isFocusable = true; minimumHeight = dp(108)
+            background = RippleDrawable(ColorStateList.valueOf(0x22349676), rounded(if (dark) panel else mint, 20), null)
+            isClickable = true; isFocusable = true; minimumHeight = dp(104)
             setOnClickListener { action() }
             contentDescription = "$name. $description"
         }
         val copy = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         copy.addView(label(name, 22f, foreground, true))
-        copy.addView(label(description, 14f, if (dark) Color.rgb(187, 210, 207) else muted).apply { setPadding(0, dp(5), dp(12), 0) })
+        copy.addView(label(description, 14f, if (dark) muted else Color.rgb(45, 64, 31)).apply { setPadding(0, dp(5), dp(12), 0) })
         card.addView(copy, LinearLayout.LayoutParams(0, -2, 1f))
         card.addView(label(if (dark) "↓" else "↗", 30f, foreground).apply { importantForAccessibility = android.view.View.IMPORTANT_FOR_ACCESSIBILITY_NO })
         root.addView(card, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(12) })
@@ -200,24 +201,26 @@ class MainActivity : ComponentActivity() {
         val brand = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
         brand.addView(ImageView(this).apply {
             setImageResource(R.drawable.ic_launcher_foreground)
-            background = rounded(ink, 14)
+            background = rounded(panel, 14)
             contentDescription = null
         }, LinearLayout.LayoutParams(dp(48), dp(48)))
         brand.addView(label("LumaLink", 23f, bold = true), LinearLayout.LayoutParams(0, -2, 1f).apply { leftMargin = dp(12) })
-        brand.addView(label("OFFLINE", 10f, ink, true).apply { background = rounded(mint, 12); setPadding(dp(10), dp(7), dp(10), dp(7)); letterSpacing = .1f })
+        brand.addView(label("OFFLINE", 10f, mint, true).apply { background = rounded(panel, 12); setPadding(dp(10), dp(7), dp(10), dp(7)); letterSpacing = .1f })
         root.addView(brand)
         gap(32)
-        root.addView(label("Files move.\nThrough light.", 34f, bold = true).apply { setLineSpacing(0f, 1f) })
+        root.addView(label("THE OFFLINE TRANSFER LAB", 10f, muted, true).apply { letterSpacing = .12f })
         gap(12)
-        root.addView(label("A screen. A camera. A direct connection.", 15f, muted))
-        gap(28)
-        actionCard("Send a file", "Choose a file to show as animated QR codes", false) { pick.launch("*/*") }
-        actionCard("Receive a file", "Point this camera at the sending phone", true) {
+        root.addView(label("Skip the cloud.\nSend with light.", 34f, bold = true).apply { setLineSpacing(0f, 1f) })
+        gap(12)
+        root.addView(label("Your files. A beam of light. Zero network.", 15f, muted))
+        root.addView(OpticalSignalView(this), LinearLayout.LayoutParams(-1, dp(116)))
+        actionCard("Send file", "01  /  Turn your screen into a sender", false) { pick.launch("*/*") }
+        actionCard("Scan & receive", "02  /  Capture, verify, save automatically", true) {
             if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) receive()
             else permission.launch(Manifest.permission.CAMERA)
         }
         gap(18)
-        root.addView(label("DISPLAY RATE", 11f, muted, true).apply { letterSpacing = .14f })
+        root.addView(label("TRANSMISSION RATE", 11f, muted, true).apply { letterSpacing = .14f })
         gap(12)
         val rates = listOf(6, 15, 30, 60)
         val choices = LinearLayout(this)
@@ -226,8 +229,8 @@ class MainActivity : ComponentActivity() {
             chips.forEachIndexed { index, chip ->
                 val selected = rates[index] == requestedFps
                 chip.isSelected = selected
-                chip.setTextColor(if (selected) Color.WHITE else ink)
-                chip.background = rounded(if (selected) ink else Color.rgb(232, 237, 230), 14)
+                chip.setTextColor(if (selected) paper else muted)
+                chip.background = rounded(if (selected) mint else panel, 14)
                 chip.contentDescription = "${rates[index]} frames per second requested${if (selected) ", selected" else ""}"
             }
         }
@@ -243,7 +246,7 @@ class MainActivity : ComponentActivity() {
         gap(10)
         root.addView(label("Start at 6 FPS. Higher rates depend on both phones.", 12f, muted))
         gap(28)
-        root.addView(label("Offline by design", 15f, bold = true))
+        root.addView(label("SCREEN / CAMERA / SAVED", 12f, bold = true))
         gap(6)
         root.addView(label("No internet, Bluetooth or pairing. Install LumaLink on both phones to transfer.", 13f, muted))
         gap(14)
@@ -329,7 +332,7 @@ class MainActivity : ComponentActivity() {
                         if (result != null || failure != null || now - lastUi >= 250) {
                             lastUi = now
                             val elapsed = ((now - start) / 1000.0).coerceAtLeast(0.001)
-                            val message = "${receiver.progress}% | ${receiver.solved} blocks | ${receiver.received} accepted\n%.1f camera/s | %.1f QR/s | %.1f accepted/s".format(frames / elapsed, decoded / elapsed, receiver.received / elapsed)
+                            val message = TransferStatus.receiving(receiver.progress, receiver.solved, receiver.received, frames, decoded, elapsed)
                             main.post {
                                 if (token != session) return@post
                                 status.text = message
@@ -340,13 +343,22 @@ class MainActivity : ComponentActivity() {
                             }
                         }
                     } catch (e: Exception) {
-                        main.post { if (token == session) { toast(e.message ?: "Camera analysis failed"); home() } }
+                        android.util.Log.e("LumaLink", "Receive analysis failed", e)
+                        main.post { if (token == session) receiveError("Camera analysis stopped", e) }
                     } finally { proxy.close() }
                 }
                 cameraProvider.unbindAll()
                 cameraProvider.bindToLifecycle(this, CameraSelector.DEFAULT_BACK_CAMERA, preview, analysis)
-            } catch (e: Exception) { if (token == session) { toast(e.message ?: "Camera unavailable"); home() } }
+            } catch (e: Exception) { if (token == session) receiveError("Camera unavailable", e) }
         }, ContextCompat.getMainExecutor(this))
+    }
+    private fun receiveError(heading: String, error: Exception) {
+        layout(); title(heading)
+        root.addView(label(error.message ?: error.javaClass.simpleName, 15f, muted))
+        gap(16)
+        root.addView(label("Check camera access and try again. Start the sender at 6 FPS.", 14f, muted))
+        button("Try receiving again") { receive() }
+        button("Back to home") { home() }
     }
     override fun onStop() { stop(); super.onStop() }
     override fun onDestroy() { stop(); worker.shutdownNow(); cameraExecutor.shutdownNow(); saveExecutor.shutdown(); super.onDestroy() }
