@@ -7,3 +7,5 @@ local.properties
 prototype/
 *.jks
 *.keystore
+__pycache__/
+*.pyc

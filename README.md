@@ -84,6 +84,16 @@ matches `h`. Any protocol change requires updating both phones.
 
 ## Validation and next work
 
+The [Python optical lab](tools/README.md) adds seeded fountain simulations, exact
+byte reconstruction, cross-language protocol fixtures and throughput-capacity
+calculations. Python is a desktop development tool; the phone app remains Kotlin.
+
+```sh
+python -m unittest discover -s tools -v
+python tools/optical_lab.py simulate --trials 30 --output .dist/simulation.json
+python tools/optical_lab.py capacity
+```
+
 See [the validation protocol](docs/benchmark-protocol.md) for regression coverage,
 physical-device checks, offline verification and end-to-end throughput gates.
 [Local validation results](docs/validation-results.md): 10 passing tests, successful
