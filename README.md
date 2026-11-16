@@ -1,0 +1,94 @@
+# LumaLink
+
+Experimental Android-to-Android optical file transfer. One phone displays QR
+symbols; the other decodes them with its camera. Both phones require LumaLink.
+There is no pairing, return acknowledgement, network transport or Bluetooth.
+The application source manifest requests only camera permission.
+
+## Build
+
+Requires JDK 17, Android SDK platform 35 and build tools 34.0.0. Set `JAVA_HOME`
+and `ANDROID_HOME` (or configure `sdk.dir` in an untracked `local.properties`).
+
+```sh
+./gradlew testDebugUnitTest lintDebug assembleDebug
+```
+
+On Windows use `gradlew.bat`. The official Gradle 8.9 wrapper is included with
+distribution checksum verification. GitHub Actions runs tests, lint and a debug
+build and publishes the debug APK as a workflow artifact. Install
+`app/build/outputs/apk/debug/app-debug.apk` on both phones. Minimum Android: 8.0
+(API 26). Physical-device behavior is not yet validated.
+
+## Use
+
+1. Start with a local 1-10 KB file and the default 6 requested FPS.
+2. Tap SEND FILE on one phone and RECEIVE FILE on the other.
+3. Keep the complete QR and its white border visible, with steady focus and no glare.
+4. After SHA-256 verification, choose where to save using the system document picker.
+5. Stop the sender manually. Try higher requested rates only while measuring acceptance.
+
+Leaving the foreground stops active work. Return HOME and restart after interruption.
+Unsaved received files and transfer state do not survive process death or rotation.
+Use local document providers for a fully offline workflow.
+
+## Improvements over the supplied prototype
+
+- Protocol v2 validates complete packets before changing receiver state, uses full
+  UUID session IDs and a canonical SHA-256 packet integrity field. It rejects v1.
+- Duplicates and invalid packets cannot reserve sequence IDs or initialize sessions.
+  Contradictions, failed file hashes and packet exhaustion produce visible retry states.
+- Decoder state is bounded: 10 MB files, 100,000 accepted packet IDs and 4,096 pending
+  equations. Old unresolved equations are evicted, which can increase recovery overhead.
+- Encoder uses a two-entry bounded queue and display callbacks, with 6/15/30/60
+  requested FPS; actual presentation and optical acceptance require measurement.
+- Module-sized QR bitmaps use a four-module quiet zone and disabled bitmap filtering.
+- Receiver decodes luminance with reusable buffers/readers, respecting crop, stride
+  and rotation. It reports analyzed, decoded and uniquely accepted packet rates.
+- Session tokens prevent stale UI callbacks; STOP cancels encoding and unbinds camera.
+- File size is bounded during background reading. Saving runs off the UI thread via
+  the document picker, including on API 26-28; it no longer uses API-29-only Downloads.
+
+## Performance and reliability limits
+
+**This does not implement or demonstrate 190 KB/s or 60 distinct optically received
+frames per second.** There are no measured phone-pair results yet.
+
+420-byte payloads yield at most 25,200 bytes/s at 60 unique accepted packets/s,
+before fountain overhead. A 2,000,000-byte file takes at least 79.4 seconds in this
+ideal case. One standard binary QR per frame cannot meet 190,000 bytes/s at 60 FPS:
+even its maximum 2,953-byte capacity is only 177,180 bytes/s before overhead.
+See [DENSO WAVE capacity](https://www.qrcode.com/en/about/standards.html).
+
+The fountain distribution remains a basic deterministic XOR scheme, not robust
+soliton or RaptorQ. It may stall or recover inefficiently on large transfers.
+Metadata and Base64 still repeat in every QR. Camera FPS/exposure/resolution are
+not explicitly negotiated. Multiple QRs per frame and custom optical grids are
+future experiments, not implemented features.
+
+Packet checksums detect accidental corruption; they do not authenticate senders.
+There is no encryption. Nearby cameras can observe transmissions. Receiver retry
+creates a fresh local decoder; it is not an acknowledgement to the sender.
+
+## Protocol v2
+
+Each QR contains JSON fields `v=2`, `id` (UUID), `n` (filename), `s` (file length),
+`k` (block count), `h` (file SHA-256), `q` (nonnegative sequence), `d` (URL-safe
+Base64 of exactly 420 bytes), and `c` (packet SHA-256). The packet digest hashes
+UTF-8 length-prefixed string representations of `v,id,n,s,k,h,q,d`, in that order.
+Lengths count JVM UTF-16 code units. Numeric fields must be JSON integers.
+The final block is zero-padded; the reconstructed file is truncated to `s`.
+`q<k` selects a systematic block; subsequent sequences deterministically select
+XOR block sets. The receiver peels singleton equations and saves only a file that
+matches `h`. Any protocol change requires updating both phones.
+
+## Validation and next work
+
+See [the validation protocol](docs/benchmark-protocol.md) for regression coverage,
+physical-device checks, offline verification and end-to-end throughput gates.
+[Local validation results](docs/validation-results.md): 10 passing tests, successful
+debug build, lint with zero errors and 14 warnings; APK permissions checked.
+See [implementation status](docs/implementation-plan.md) for audit-to-file mapping
+and remaining priorities.
+Priority: validate builds and API compatibility, quantify fountain overhead at scale,
+measure the optical channel, then prototype a higher-capacity multi-QR transport.
