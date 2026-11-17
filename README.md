@@ -29,7 +29,7 @@ build and publishes the debug APK as a workflow artifact. Install
 ## Use
 
 The dark home screen has lime-accented send/receive cards, an optical-link
-illustration and 6/15/30/60 FPS choices.
+illustration and 3/6/15/30/60 FPS choices (default: 3 for acquisition).
 Muted sage/teal and violet gradients sit over a slowly moving home background.
 Tap the optical illustration for a pulse or use its motion control to pause it.
 Motion respects Android's animator setting and is absent from transfer screens.
@@ -47,13 +47,34 @@ The verified average runs from the first accepted packet through reconstruction;
 it excludes camera acquisition and saving. Very brief transfers show no numeric
 rate rather than an unstable estimate. Frame/QR/accepted-symbol rates remain visible.
 
-1. Select **Light / QR on both phones**. Start with a local 1-10 KB file and the default 6 requested FPS.
+1. Install this revision on **both phones** and select **Light / QR**. Start with
+   a local 1-10 KB file and the default 3 requested FPS, then test 6 FPS.
 2. Tap SEND FILE on one phone and RECEIVE FILE on the other.
 3. Keep the complete QR and its white border visible, with steady focus and no glare.
 4. After SHA-256 verification, the file saves automatically to the matching LumaLink
    folder: images → Pictures, videos → Movies, audio → Music, everything else → Download.
    The completion screen shows the saved path. Android 8–9 may ask for storage permission.
 5. Stop the sender manually. Try higher requested rates only while measuring acceptance.
+
+The default Light sender uses smaller 192-byte symbols in compact optical protocol
+v3 (binary fields + raw bytes + Base45 + CRC32). Legacy v2 receiving is retained,
+but older app versions cannot receive the new symbols. The QR is drawn at an
+integer number of physical pixels per module. The first symbol holds for a second
+for focus; Hold QR for focus pauses on the current symbol until Resume. Source
+blocks repeat alongside new repair equations after the first systematic pass.
+
+The receiver requests a 1280x720 analysis stream with device fallback, attempts a
+centered luminance crop before periodic full-frame searches, and uses bulk row
+copies instead of per-pixel buffer access when possible. QR detection handles
+orientation without rotating the entire camera image. Tap the camera preview to
+refocus. An available camera AE range containing 30 FPS and a small negative
+exposure compensation are requested; actual behavior is device-dependent.
+
+Receiver diagnostics show actual analysis resolution, mean copy/decode latency,
+packet validation/fountain latency, duplicate/rejected/foreign-session counts and
+the last accepted sequence. If QR/s is near zero, investigate capture/readability;
+if QR/s is high but accepted/s is low, examine duplicate/rejection counts. A sender
+held on one QR naturally produces only one accepted sequence.
 
 Leaving the foreground stops active work. Return HOME and restart after interruption.
 Unsaved received files and transfer state do not survive process death or rotation.
@@ -101,7 +122,7 @@ See [Wi-Fi Direct validation](docs/wifi-direct-validation.md).
   Contradictions, failed file hashes and packet exhaustion produce visible retry states.
 - Decoder state is bounded: 10 MB files, 100,000 accepted packet IDs and 4,096 pending
   equations. Old unresolved equations are evicted, which can increase recovery overhead.
-- Encoder uses a two-entry bounded queue and display callbacks, with 6/15/30/60
+- Encoder uses a two-entry bounded queue and display callbacks, with 3/6/15/30/60
   requested FPS; actual presentation and optical acceptance require measurement.
 - Module-sized QR bitmaps use a four-module quiet zone and disabled bitmap filtering.
 - Receiver decodes luminance with reusable buffers/readers, respecting crop, stride
@@ -124,7 +145,10 @@ demonstrated on phones.** There are no measured phone-pair results yet. The
 following QR capacity limits apply to Light mode; Wi-Fi Direct has separate
 physical-device validation gates.
 
-420-byte payloads yield at most 25,200 bytes/s at 60 unique accepted packets/s,
+The current 192-byte optical mode caps at 576 equation bytes/s at 3 accepted
+symbols/s, or 1,152 bytes/s at 6, before loss, padding, source repeats and fountain
+overhead. This trades capacity for readability; use Wi-Fi Direct for large files.
+The legacy 420-byte payloads yield at most 25,200 bytes/s at 60 unique accepted packets/s,
 before fountain overhead. A 2,000,000-byte file takes at least 79.4 seconds in this
 ideal case. One standard binary QR per frame cannot meet 190,000 bytes/s at 60 FPS:
 even its maximum 2,953-byte capacity is only 177,180 bytes/s before overhead.
@@ -140,7 +164,18 @@ In Light mode, packet checksums detect accidental corruption; they do not authen
 Light mode has no encryption. Nearby cameras can observe transmissions. Receiver retry
 creates a fresh local decoder; it is not an acknowledgement to the sender.
 
-## Protocol v2
+## Optical protocols
+
+Default compact v3 frames start with `LL3:` followed by Base45 alphanumeric text.
+Decoded fields are: version byte (3), UUID (two big-endian longs), original length
+(int), block size (unsigned short), sequence (int), SHA-256 (32 raw bytes), UTF-8
+filename length (unsigned short), filename bytes, raw padded equation payload and
+CRC32 (int). Block size is bounded to 128–1024 bytes; the current sender uses 192.
+CRC covers every byte before the CRC. File length remains capped at 10 MB. The
+receiver normalizes valid packets to the existing peeling decoder with a bound
+block size. Neither optical protocol authenticates or encrypts file contents.
+
+Legacy v2 remains supported for reception and cross-language regression fixtures:
 
 Each QR contains JSON fields `v=2`, `id` (UUID), `n` (filename), `s` (file length),
 `k` (block count), `h` (file SHA-256), `q` (nonnegative sequence), `d` (URL-safe

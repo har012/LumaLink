@@ -28,25 +28,29 @@ object Codec {
     fun b64(b: ByteArray): String = Base64.getUrlEncoder().encodeToString(b)
     fun un64(s: String): ByteArray = Base64.getUrlDecoder().decode(s)
     // Length-prefixed fields avoid ambiguous concatenation. Integrity, not authentication.
-    fun packetHash(o: JSONObject): String = hash(listOf("v", "id", "n", "s", "k", "h", "q", "d")
+    fun packetHash(o: JSONObject): String = hash((listOf("v", "id", "n", "s", "k", "h", "q", "d") + if (o.optInt("v") == 3) listOf("b") else emptyList())
         .joinToString("") { key -> val value = o.get(key).toString(); "${value.length}:$value" }.toByteArray(Charsets.UTF_8))
 }
-class Sender(val name: String, val bytes: ByteArray) {
-    init { require(bytes.isNotEmpty() && bytes.size <= Codec.MAX_BYTES) }
+class Sender(val name: String, val bytes: ByteArray, val blockSize: Int = Codec.BLOCK) {
+    init { require(bytes.isNotEmpty() && bytes.size <= Codec.MAX_BYTES && blockSize in 128..1024) }
     val id: String = UUID.randomUUID().toString()
-    val count = (bytes.size + Codec.BLOCK - 1) / Codec.BLOCK
+    val count = (bytes.size + blockSize - 1) / blockSize
     val sha = Codec.hash(bytes)
-    private val blocks = Array(count) { i -> bytes.copyOfRange(i * Codec.BLOCK, min(bytes.size, (i+1)*Codec.BLOCK)).copyOf(Codec.BLOCK) }
+    private val blocks = Array(count) { i -> bytes.copyOfRange(i * blockSize, min(bytes.size, (i+1)*blockSize)).copyOf(blockSize) }
     fun frame(seq: Int): String {
         require(seq >= 0)
-        val payload = ByteArray(Codec.BLOCK)
+        val payload = ByteArray(blockSize)
         for (i in Codec.indices(count, seq)) Codec.xor(payload, blocks[i])
-        val packet = JSONObject().put("v",2).put("id",id).put("n",name.take(100)).put("s",bytes.size).put("k",count)
+        val packet = JSONObject().put("v",if (blockSize == Codec.BLOCK) 2 else 3).put("id",id).put("n",name.take(100)).put("s",bytes.size).put("k",count)
             .put("h",sha).put("q",seq).put("d",Codec.b64(payload))
+        if (blockSize != Codec.BLOCK) return CompactOpticalPacket.encode(packet.put("b", blockSize))
         return packet.put("c", Codec.packetHash(packet)).toString()
     }
 }
 class Receiver {
+    enum class PacketResult { ACCEPTED, DUPLICATE, INVALID, FOREIGN, FINISHED }
+    var lastPacketResult = PacketResult.INVALID; private set
+    var lastSequence = -1; private set
     enum class State { WAITING, RECEIVING, COMPLETE, FAILED }
     var state = State.WAITING; private set
     var error: String? = null; private set
@@ -55,6 +59,7 @@ class Receiver {
     private var name = ""
     private var size = 0
     private var count = 0
+    private var blockSize = Codec.BLOCK
     private var sha = ""
     private lateinit var blocks: Array<ByteArray?>
     private val equations = mutableListOf<Pair<MutableSet<Int>,ByteArray>>()
@@ -67,12 +72,16 @@ class Receiver {
     val recoveredBytes get() = solvedBytes
     val progress get() = if (count == 0) 0 else solved * 100 / count
     @Synchronized fun accept(raw: String): Boolean {
-        if (state == State.FAILED || state == State.COMPLETE || raw.length > 4096) return false
-        val o = try { JSONObject(raw) } catch (_: Exception) { return false }
+        lastPacketResult = PacketResult.INVALID
+        if (state == State.FAILED || state == State.COMPLETE) { lastPacketResult = PacketResult.FINISHED; return false }
+        if (raw.length > 4096) return false
+        val o = try { JSONObject(if (raw.startsWith("LL3:")) CompactOpticalPacket.decode(raw) else raw) } catch (_: Exception) { return false }
         fun integer(key: String): Boolean = o.opt(key) is Int
         if (!listOf("v", "s", "k", "q").all(::integer)) return false
         if (!listOf("id", "n", "h", "d", "c").all { o.opt(it) is String }) return false
-        if (o.optInt("v") != 2) return false
+        if (o.optInt("v") !in 2..3) return false
+        val block = if (o.optInt("v") == 3) o.optInt("b", -1) else Codec.BLOCK
+        if (block !in 128..1024 || (o.optInt("v") == 3 && !integer("b"))) return false
         val fid = o.optString("id")
         val k = o.optInt("k")
         val len = o.optInt("s")
@@ -80,19 +89,20 @@ class Receiver {
         val hash = o.optString("h")
         if (!fid.matches(Regex("[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}")) ||
             !hash.matches(Regex("[0-9a-f]{64}")) || o.getString("n").length > 100 ||
-            len !in 1..Codec.MAX_BYTES || k != (len+Codec.BLOCK-1)/Codec.BLOCK || seq < 0) return false
+            len !in 1..Codec.MAX_BYTES || k != (len+block-1)/block || seq < 0) return false
         val payload = try {
-            if (o.getString("d").length != 560 || Codec.packetHash(o) != o.getString("c")) return false
+            if (o.getString("d").length != ((block + 2) / 3) * 4 || Codec.packetHash(o) != o.getString("c")) return false
             Codec.un64(o.getString("d"))
         } catch (_: Exception) { return false }
-        if (payload.size != Codec.BLOCK) return false
-        if (state != State.WAITING && (id != fid || k != count || len != size || sha != hash || name != safeName(o.getString("n")))) return false
-        if (seq in seen) return false
+        if (payload.size != block) return false
+        if (state != State.WAITING && (id != fid || k != count || len != size || block != blockSize || sha != hash || name != safeName(o.getString("n")))) { lastPacketResult = PacketResult.FOREIGN; return false }
+        if (seq in seen) { lastPacketResult = PacketResult.DUPLICATE; return false }
         if (seen.size >= Codec.MAX_PACKETS) return fail("Packet limit reached. Restart reception.")
         if (state == State.WAITING) {
             id = fid; name = o.optString("n").substringAfterLast('/').take(100)
             name = safeName(name)
             size = len; count = k; sha = o.optString("h")
+            blockSize = block
             blocks = arrayOfNulls(k)
             state = State.RECEIVING
         }
@@ -119,17 +129,18 @@ class Receiver {
                 }
                 else if (ids.size == 1) {
                     val i = ids.first(); blocks[i] = data.copyOf(); solved++
-                    solvedBytes += min(Codec.BLOCK, size - i * Codec.BLOCK)
+                    solvedBytes += min(blockSize, size - i * blockSize)
                     iter.remove(); changed = true
                 }
             }
         }
         if (solved == count && complete == null) {
             val output = ByteArray(size)
-            for (i in 0 until count) System.arraycopy(blocks[i]!!,0,output,i*Codec.BLOCK,min(Codec.BLOCK,size-i*Codec.BLOCK))
+            for (i in 0 until count) System.arraycopy(blocks[i]!!,0,output,i*blockSize,min(blockSize,size-i*blockSize))
             if (Codec.hash(output) == sha) { complete = output; state = State.COMPLETE; equations.clear(); seen.clear() }
             else return fail("File verification failed. Restart reception.")
         }
+        lastSequence = seq; lastPacketResult = PacketResult.ACCEPTED
         return true
     }
     private fun safeName(value: String) = value.substringAfterLast('/').substringAfterLast('\\')

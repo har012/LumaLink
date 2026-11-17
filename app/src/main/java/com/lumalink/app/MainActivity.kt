@@ -15,6 +15,20 @@ import android.provider.OpenableColumns
 import android.view.Choreographer
 import android.view.Gravity
 import android.view.WindowManager
+import android.hardware.camera2.CaptureRequest
+import android.hardware.camera2.CameraCharacteristics
+import android.util.Size
+import android.view.MotionEvent
+import androidx.camera.core.FocusMeteringAction
+import androidx.camera.core.Camera
+import androidx.camera.core.AspectRatio
+import androidx.camera.core.resolutionselector.ResolutionSelector
+import androidx.camera.core.resolutionselector.ResolutionStrategy
+import androidx.camera.core.resolutionselector.AspectRatioStrategy
+import androidx.camera.camera2.interop.Camera2CameraInfo
+import androidx.camera.camera2.interop.Camera2CameraControl
+import androidx.camera.camera2.interop.CaptureRequestOptions
+import androidx.core.view.doOnLayout
 import android.widget.*
 import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
@@ -46,7 +60,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var root: LinearLayout
     private var pendingSave: Pair<ByteArray, String>? = null
     private val saveExecutor = Executors.newSingleThreadExecutor()
-    private var requestedFps = 6
+    private var requestedFps = 3
     private var motionEnabled = true
     private var verifiedSpeed: String? = null
     private var wifiMode = false
@@ -129,7 +143,7 @@ class MainActivity : ComponentActivity() {
                         }
                         output.toByteArray()
                     } ?: error("Cannot read file")
-                    Sender(name, data)
+                    Sender(name, data, if (wifiMode) Codec.BLOCK else 192)
                 }
                 main.post {
                     if (token != session) return@post
@@ -164,6 +178,7 @@ class MainActivity : ComponentActivity() {
         analyzer?.clearAnalyzer(); analyzer = null
         provider?.unbindAll()
         window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        window.attributes = window.attributes.apply { screenBrightness = WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE }
     }
     private fun layout(scrollable: Boolean = false) {
         stop()
@@ -287,7 +302,7 @@ class MainActivity : ComponentActivity() {
         gap(18)
         root.addView(label("LIGHT MODE DISPLAY RATE", 11f, muted, true).apply { letterSpacing = .14f })
         gap(12)
-        val rates = listOf(6, 15, 30, 60)
+        val rates = listOf(3, 6, 15, 30, 60)
         val choices = LinearLayout(this)
         val chips = mutableListOf<TextView>()
         fun updateRates() {
@@ -309,7 +324,7 @@ class MainActivity : ComponentActivity() {
         }
         updateRates(); root.addView(choices)
         gap(10)
-        root.addView(label("Start at 6 FPS. Higher rates depend on both phones.", 12f, muted))
+        root.addView(label("Reliable mode: smaller QR frames. Start at 3 FPS; update both phones.", 12f, muted))
         }
         gap(28)
         root.addView(label("SCREEN / CAMERA / SAVED", 12f, bold = true))
@@ -322,9 +337,15 @@ class MainActivity : ComponentActivity() {
         layout(); window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         val token = session
         title("Sending: ${sender.name}")
-        val qr = ImageView(this).apply { setBackgroundColor(android.graphics.Color.WHITE); scaleType = ImageView.ScaleType.FIT_CENTER }
+        window.attributes = window.attributes.apply { screenBrightness = .9f }
+        val qr = QrDisplayView(this)
         root.addView(qr, LinearLayout.LayoutParams(-1,0,1f))
         val status = label("Preparing QR frames…", 13f, muted).apply { setPadding(0, dp(16), 0, dp(4)) }; root.addView(status)
+        var paused = false
+        root.addView(Button(this).apply {
+            text = "Hold QR for focus"; isAllCaps = false
+            setOnClickListener { paused = !paused; text = if (paused) "Resume transfer" else "Hold QR for focus" }
+        }, LinearLayout.LayoutParams(-1, dp(48)))
         button("STOP") { home() }
         val queue = ArrayBlockingQueue<Pair<Int, Bitmap>>(2)
         work = worker.submit {
@@ -332,12 +353,12 @@ class MainActivity : ComponentActivity() {
                 val writer = QRCodeWriter()
                 val hints = mapOf(EncodeHintType.ERROR_CORRECTION to ErrorCorrectionLevel.L, EncodeHintType.MARGIN to 4,
                     EncodeHintType.CHARACTER_SET to "UTF-8")
-                var seq = 0
+                var emission = 0L
                 while (!Thread.currentThread().isInterrupted && token == session) {
+                    val seq = LightSchedule.sequence(sender.count, emission++)
                     val matrix = writer.encode(sender.frame(seq), BarcodeFormat.QR_CODE, 0, 0, hints)
                     val pixels = IntArray(matrix.width * matrix.height) { i -> if (matrix[i % matrix.width, i / matrix.width]) 0xff000000.toInt() else 0xffffffff.toInt() }
                     queue.put(seq to Bitmap.createBitmap(pixels, matrix.width, matrix.height, Bitmap.Config.ARGB_8888))
-                    seq++
                 }
             } catch (_: InterruptedException) { Thread.currentThread().interrupt() }
             catch (e: Exception) { main.post { if (token == session) { toast(e.message ?: "Encoding failed"); home() } } }
@@ -349,9 +370,9 @@ class MainActivity : ComponentActivity() {
         val callback = object : Choreographer.FrameCallback {
             override fun doFrame(time: Long) {
                 if (token != session) return
-                if (last == 0L || time - last >= interval - 500_000L) {
+                if (!paused && (last == 0L || (time - first >= 1_000_000_000L && time - last >= interval - 500_000L))) {
                     queue.poll()?.let { (seq, bitmap) ->
-                        qr.setImageDrawable(android.graphics.drawable.BitmapDrawable(resources, bitmap).apply { isFilterBitmap = false })
+                        qr.setSymbol(bitmap)
                         last = time; if (first == 0L) first = time
                         submitted++
                         val fps = if (time == first) 0.0 else (submitted - 1) * 1e9 / (time - first)
@@ -369,7 +390,8 @@ class MainActivity : ComponentActivity() {
         layout(); window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         val token = session
         title("Point camera at sender")
-        val view = PreviewView(this); root.addView(view, LinearLayout.LayoutParams(-1,0,1f))
+        val view = PreviewView(this).apply { scaleType = PreviewView.ScaleType.FIT_CENTER }
+        root.addView(view, LinearLayout.LayoutParams(-1,0,1f))
         val status = label("Waiting for the first QR frame…", 13f, muted).apply { setPadding(0, dp(16), 0, dp(4)) }; root.addView(status)
         button("STOP") { home() }
         val receiver = Receiver()
@@ -380,26 +402,45 @@ class MainActivity : ComponentActivity() {
             if (token != session) return@addListener
             try {
                 val cameraProvider = future.get(); provider = cameraProvider
-                val preview = androidx.camera.core.Preview.Builder().build().also { it.surfaceProvider = view.surfaceProvider }
-                val analysis = ImageAnalysis.Builder().setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST).build()
+                val preview = androidx.camera.core.Preview.Builder().setTargetAspectRatio(AspectRatio.RATIO_16_9).build().also { it.surfaceProvider = view.surfaceProvider }
+                val resolution = ResolutionSelector.Builder()
+                    .setAspectRatioStrategy(AspectRatioStrategy.RATIO_16_9_FALLBACK_AUTO_STRATEGY)
+                    .setResolutionStrategy(ResolutionStrategy(Size(1280, 720), ResolutionStrategy.FALLBACK_RULE_CLOSEST_HIGHER_THEN_LOWER)).build()
+                val analysis = ImageAnalysis.Builder().setResolutionSelector(resolution)
+                    .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST).build()
                 analyzer = analysis
                 var frames = 0L
                 var decoded = 0L
                 var start = 0L
                 var lastUi = 0L
+                var duplicates = 0L; var rejected = 0L; var foreign = 0L
+                var decodeNanos = 0L; var fecNanos = 0L
                 analysis.setAnalyzer(cameraExecutor) { proxy ->
                     try {
                         if (token != session) return@setAnalyzer
                         val now = android.os.SystemClock.elapsedRealtime()
                         if (start == 0L) start = now
                         frames++
+                        val decodeStart = System.nanoTime()
                         val text = decoder.decode(proxy)
+                        decodeNanos += System.nanoTime() - decodeStart
                         if (wifiMode && text != null) {
                             val invite = runCatching { DirectInvitation.parse(text) }.getOrNull()
                             if (invite != null) main.post { if (token == session) confirmDirect(invite) }
                             return@setAnalyzer
                         }
-                        if (text != null) { decoded++; receiver.accept(text) }
+                        if (text != null) {
+                            decoded++
+                            val fecStart = System.nanoTime()
+                            receiver.accept(text)
+                            fecNanos += System.nanoTime() - fecStart
+                            when (receiver.lastPacketResult) {
+                                Receiver.PacketResult.DUPLICATE -> duplicates++
+                                Receiver.PacketResult.INVALID -> rejected++
+                                Receiver.PacketResult.FOREIGN -> foreign++
+                                else -> Unit
+                            }
+                        }
                         if (receiver.received > 0) speed.start(android.os.SystemClock.elapsedRealtime())
                         val result = receiver.complete
                         val failure = receiver.error
@@ -408,7 +449,10 @@ class MainActivity : ComponentActivity() {
                             val elapsed = ((now - start) / 1000.0).coerceAtLeast(0.001)
                             val measuredAt = android.os.SystemClock.elapsedRealtime()
                             val rate = speed.update(measuredAt, receiver.recoveredBytes, receiver.received)
-                            val message = rate + "\n" + TransferStatus.receiving(receiver.progress, receiver.solved, receiver.received, frames, decoded, elapsed)
+                            val diagnostic = "\n%s · decode %.1f ms · FEC %.1f ms\nDuplicates %d · rejected %d · other session %d\nLast accepted #%d · Tap preview to focus".format(java.util.Locale.US,
+                                decoder.resolution, decodeNanos / 1e6 / frames, if (decoded == 0L) 0.0 else fecNanos / 1e6 / decoded,
+                                duplicates, rejected, foreign, receiver.lastSequence)
+                            val message = rate + "\n" + TransferStatus.receiving(receiver.progress, receiver.solved, receiver.received, frames, decoded, elapsed) + diagnostic
                             val finishedRate = if (result != null) speed.verified(measuredAt, result.size) else null
                             main.post {
                                 if (token != session) return@post
@@ -426,9 +470,38 @@ class MainActivity : ComponentActivity() {
                     } finally { proxy.close() }
                 }
                 cameraProvider.unbindAll()
-                cameraProvider.bindToLifecycle(this, CameraSelector.DEFAULT_BACK_CAMERA, preview, analysis)
+                val camera = cameraProvider.bindToLifecycle(this, CameraSelector.DEFAULT_BACK_CAMERA, preview, analysis)
+                tuneCamera(camera, view, token)
             } catch (e: Exception) { if (token == session) receiveError("Camera unavailable", e) }
         }, ContextCompat.getMainExecutor(this))
+    }
+    @androidx.annotation.OptIn(markerClass = [androidx.camera.camera2.interop.ExperimentalCamera2Interop::class])
+    private fun tuneCamera(camera: Camera, view: PreviewView, token: Long) {
+        runCatching {
+            val info = Camera2CameraInfo.from(camera.cameraInfo)
+            val ranges = info.getCameraCharacteristic(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)
+            val range = ranges?.filter { it.lower <= 30 && it.upper >= 30 }?.minByOrNull { it.upper - it.lower }
+            val options = CaptureRequestOptions.Builder()
+            if (range != null) options.setCaptureRequestOption(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, range)
+            Camera2CameraControl.from(camera.cameraControl).setCaptureRequestOptions(options.build())
+            val exposure = camera.cameraInfo.exposureState
+            if (exposure.isExposureCompensationSupported && exposure.exposureCompensationRange.contains(-1))
+                camera.cameraControl.setExposureCompensationIndex(-1)
+        }.onFailure { android.util.Log.w("LumaLink", "Optional camera tuning unavailable", it) }
+        fun focus(x: Float, y: Float) {
+            if (token != session) return
+            runCatching {
+                val point = view.meteringPointFactory.createPoint(x, y)
+                camera.cameraControl.startFocusAndMetering(FocusMeteringAction.Builder(point,
+                    FocusMeteringAction.FLAG_AF or FocusMeteringAction.FLAG_AE)
+                    .setAutoCancelDuration(5, java.util.concurrent.TimeUnit.SECONDS).build())
+            }
+        }
+        view.doOnLayout { focus(view.width / 2f, view.height / 2f) }
+        view.setOnTouchListener { _, event ->
+            if (event.action == MotionEvent.ACTION_UP) { view.performClick(); focus(event.x, event.y) }
+            true
+        }
     }
     private fun sendDirect(sender: Sender) {
         layout(); window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)

@@ -3,6 +3,11 @@
 The Android app remains Kotlin. This Python 3.10+ desktop toolkit supports offline
 fountain experiments and capacity analysis. It has no third-party dependencies.
 Python does not run inside the Android app and is not required on either phone.
+The simulator and shared fixtures model legacy 420-byte protocol v2. The Android
+Light sender now defaults to compact v3 with 192-byte symbols and systematic
+repeats; these lab recovery results do not model that complete emission schedule.
+Use `capacity --payload 192` to explore its equation-payload capacity, with measured
+acceptance and appropriate repeat/fountain expansion assumptions.
 
 From the repository root:
 

@@ -2,6 +2,26 @@
 
 No phone-to-phone performance results have been collected for this revision.
 
+## Optical readability regression
+
+Install the same current APK on sender and receiver; default compact v3 symbols
+are incompatible with old receivers. Test a local 1 KB and 10 KB file at 3 then
+6 FPS on the reported Samsung S24, swapping roles and naming the sender model.
+The first symbol holds for a second; allow autofocus, keep the QR centered, or
+use Hold QR for focus and tap the receiver preview, then Resume.
+
+Record analysis resolution, camera/s, QR/s, accepted/s, mean decode and FEC ms,
+duplicates, rejected frames, other-session frames, last accepted sequence and
+recovered KB/s. Compare the sender sequence counter against the receiver. Test
+full-frame fallback with off-center symbols, portrait/landscape, distances, glare,
+normal/bright rooms and changed exposure. Verify final saved bytes and SHA-256.
+The app requests approximately 720p and an available AE range containing 30 FPS;
+neither camera capture rate nor exact exposure is guaranteed by that request.
+
+Synthetic QR tests prove only generated-image decoding, not optical reception.
+The smaller default symbols and 3 FPS trade speed for acquisition reliability;
+there is no measured S24 improvement or 190 KB/s claim yet.
+
 ## Build and correctness
 
 Run `./gradlew testDebugUnitTest lintDebug assembleDebug` with JDK 17 and SDK 35.

@@ -123,3 +123,32 @@ No two-phone Wi-Fi Direct radio test has been performed. Discovery, OEM connecti
 prompts, API-specific permissions, cancellation/group cleanup and achieved KB/s
 remain the physical-device gates in wifi-direct-validation.md. Loopback results
 are not evidence of radio throughput or meeting the 190 KB/s target.
+
+## Optical acquisition changes - 2026-11-18
+
+In response to S24 reception stalling at one accepted block even at 6 FPS, the
+default Light sender now uses 192-byte compact v3 packets, binary metadata/raw
+payload, Base45 alphanumeric QR encoding and CRC32. Legacy v2 reception and its
+Python interoperability fixtures remain supported. New v3 senders require the
+updated app on the receiving phone. Integer-module rendering avoids fractional
+QR scaling. First-symbol acquisition hold, a manual hold/resume control and
+repeated systematic packets supplement the fountain equations.
+
+Camera analysis requests 1280x720 with device fallback, full-preview FIT_CENTER,
+an available AE FPS range containing 30, center autofocus/exposure metering and
+tap-to-focus. Small negative exposure compensation is requested when supported.
+The decoder uses center-crop luminance, bulk row copies and periodic full-frame
+fallback; it no longer rotates all pixels before QR detection. Diagnostics expose
+resolution, decode/packet-FEC latency, duplicates, rejects, foreign sessions and
+the last accepted sequence. The default is now 3 FPS, with 6/15/30/60 still selectable.
+
+`testDebugUnitTest lintDebug assembleDebug` passed: 34 Kotlin tests, zero failures,
+zero lint errors and 22 warnings. Tests include known Base45 vectors/all byte
+pairs, compact exact-byte reconstruction, checksum rejection, repeated-source
+recovery, smaller generated QR module counts and decoding all four right-angle
+rotations, plus the strided/cropped bulk-copy path. Wi-Fi stream tests still pass.
+
+No physical phone was connected. Synthetic QR image tests do not demonstrate
+Samsung S24 acquisition, true camera FPS, short exposure or improved optical
+throughput. Those remain device tests in benchmark-protocol.md. Smaller symbols
+trade payload capacity for readability; no high-speed claim is made.

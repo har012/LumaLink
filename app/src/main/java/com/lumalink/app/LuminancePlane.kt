@@ -9,6 +9,14 @@ internal object LuminancePlane {
         require(rotation in listOf(0, 90, 180, 270))
         require(output.size == width * height)
         val base = buffer.position()
+        if (rotation == 0 && pixelStride == 1) {
+            val source = buffer.duplicate()
+            for (y in 0 until height) {
+                source.position(base + (top + y) * rowStride + left)
+                source.get(output, y * width, width)
+            }
+            return
+        }
         for (y in 0 until height) for (x in 0 until width) {
             val destination = when (rotation) {
                 90 -> x * height + height - 1 - y
