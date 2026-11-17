@@ -175,6 +175,8 @@ class MainActivity : ComponentActivity() {
             motionEnabled = this@MainActivity.motionEnabled
             addView(ScrollView(this@MainActivity).apply {
             isFillViewport = true
+            isVerticalScrollBarEnabled = false
+            isHorizontalScrollBarEnabled = false
             addView(root, FrameLayout.LayoutParams(-1, -2))
             }, FrameLayout.LayoutParams(-1, -1))
         } else root
@@ -240,7 +242,6 @@ class MainActivity : ComponentActivity() {
             contentDescription = null
         }, LinearLayout.LayoutParams(dp(48), dp(48)))
         brand.addView(label("LumaLink", 23f, bold = true), LinearLayout.LayoutParams(0, -2, 1f).apply { leftMargin = dp(12) })
-        brand.addView(label("OFFLINE", 10f, mint, true).apply { background = rounded(panel, 12); setPadding(dp(10), dp(7), dp(10), dp(7)); letterSpacing = .1f })
         root.addView(brand)
         gap(32)
         root.addView(label("THE OFFLINE TRANSFER LAB", 10f, muted, true).apply { letterSpacing = .12f })
@@ -478,7 +479,11 @@ class MainActivity : ComponentActivity() {
         val status = label("Looking for ${invite.owner}…\nEnable Wi-Fi and Location for peer discovery if required by your phone.", 14f, muted)
         root.addView(status)
         val peers = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        root.addView(ScrollView(this).apply { addView(peers) }, LinearLayout.LayoutParams(-1, 0, 1f))
+        root.addView(ScrollView(this).apply {
+            isVerticalScrollBarEnabled = false
+            isHorizontalScrollBarEnabled = false
+            addView(peers)
+        }, LinearLayout.LayoutParams(-1, 0, 1f))
         button("Cancel transfer") { home() }
         try {
             val transfer = WifiDirectTransfer(this, { if (token == session) status.text = it }, { if (token == session) receiveError("Wi-Fi Direct failed", it) })
