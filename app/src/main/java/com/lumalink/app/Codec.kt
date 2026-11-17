@@ -61,8 +61,10 @@ class Receiver {
     private val seen = HashSet<Int>()
     var received = 0; private set
     var solved = 0; private set
+    private var solvedBytes = 0
     var complete: ByteArray? = null; private set
     val filename get() = name
+    val recoveredBytes get() = solvedBytes
     val progress get() = if (count == 0) 0 else solved * 100 / count
     @Synchronized fun accept(raw: String): Boolean {
         if (state == State.FAILED || state == State.COMPLETE || raw.length > 4096) return false
@@ -116,7 +118,9 @@ class Receiver {
                     iter.remove()
                 }
                 else if (ids.size == 1) {
-                    val i = ids.first(); blocks[i] = data.copyOf(); solved++; iter.remove(); changed = true
+                    val i = ids.first(); blocks[i] = data.copyOf(); solved++
+                    solvedBytes += min(Codec.BLOCK, size - i * Codec.BLOCK)
+                    iter.remove(); changed = true
                 }
             }
         }

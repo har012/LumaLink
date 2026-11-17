@@ -25,6 +25,9 @@ build and publishes the debug APK as a workflow artifact. Install
 
 The dark home screen has lime-accented send/receive cards, an optical-link
 illustration and 6/15/30/60 FPS choices.
+Muted sage/teal and violet gradients sit over a slowly moving home background.
+Tap the optical illustration for a pulse or use its motion control to pause it.
+Motion respects Android's animator setting and is absent from transfer screens.
 The layout respects system bars and display cutouts; the home screen scrolls on
 small displays. The adaptive QR/light-beam launcher icon also supports Android
 13 themed icons.
@@ -32,6 +35,12 @@ small displays. The adaptive QR/light-beam launcher icon also supports Android
 Receiver status formatting handles progress percent signs safely, including while
 waiting for the first packet. Unexpected camera/analysis errors remain on a retry
 screen and are logged under `LumaLink` in Logcat, rather than returning home.
+The receiver shows a rolling recovered-file rate in decimal KB/s, followed by an
+average verified-file rate after SHA-256 verification. The live rate counts solved
+file bytes, not duplicated/redundant packets. It can pause during fountain solving.
+The verified average runs from the first accepted packet through reconstruction;
+it excludes camera acquisition and saving. Very brief transfers show no numeric
+rate rather than an unstable estimate. Frame/QR/accepted-symbol rates remain visible.
 
 1. Start with a local 1-10 KB file and the default 6 requested FPS.
 2. Tap SEND FILE on one phone and RECEIVE FILE on the other.

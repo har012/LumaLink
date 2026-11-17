@@ -79,3 +79,23 @@ illustration. System bar appearance is configured for the dark background.
 All 15 Kotlin tests passed; lint completed with zero errors and 14 warnings, and
 the debug APK built successfully. Physical receiving and the redesigned layout
 still need a phone check; no phone was connected for this validation.
+
+## Ambient motion, gradients, icons and receive speed
+
+Added home-only ambient violet/teal lighting, a moving optical pulse, a tappable
+pulse illustration and an explicit pause control. Animations use bounded 20 Hz
+redraws, stop on detach/window hiding, and respect disabled system animators.
+Transfer screens do not host these animations. Send/receive cards now use muted
+sage/teal and violet/navy gradients and custom paper-plane/scanner vector icons.
+
+Live speed is a rolling recovered-byte rate in decimal KB/s. It ignores duplicate
+and redundant packets, excludes padding even when the final block is solved first,
+and can fall to zero while the decoder waits for useful equations. The final
+verified average spans first accepted packet through completed reconstruction and
+hash verification, excluding acquisition and saving. Transfers under 250 ms show
+an insufficient-duration message rather than a numeric rate.
+
+All 20 Kotlin tests passed, with zero lint errors (14 warnings) and a successful
+debug APK build. Emulator installation was attempted, but its package service
+failed with Broken pipe and subsequently reported "Can't find service: package".
+Visual interaction and physical optical throughput remain unverified for this revision.

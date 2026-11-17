@@ -47,6 +47,8 @@ class MainActivity : ComponentActivity() {
     private var pendingSave: Pair<ByteArray, String>? = null
     private val saveExecutor = Executors.newSingleThreadExecutor()
     private var requestedFps = 6
+    private var motionEnabled = true
+    private var verifiedSpeed: String? = null
 
     private val storagePermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         val pending = pendingSave ?: return@registerForActivityResult
@@ -79,6 +81,7 @@ class MainActivity : ComponentActivity() {
                 layout()
                 title(if (result.isSuccess) "File saved and SHA-256 verified" else "Save failed")
                 root.addView(label(result.fold({ "Saved to $it\n${data.size} bytes" }, { it.message ?: "Storage unavailable" })))
+                if (result.isSuccess) verifiedSpeed?.let { root.addView(label(it, 14f, muted)) }
                 if (result.isFailure) button("Retry saving") { requestSave(data, name) }
                 button("HOME") { home() }
             }
@@ -144,12 +147,14 @@ class MainActivity : ComponentActivity() {
         stop()
         root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(paper)
+            if (!scrollable) setBackgroundColor(paper)
         }
-        val host = if (scrollable) ScrollView(this).apply {
+        val host = if (scrollable) AmbientLayout(this).apply {
+            motionEnabled = this@MainActivity.motionEnabled
+            addView(ScrollView(this@MainActivity).apply {
             isFillViewport = true
-            setBackgroundColor(paper)
             addView(root, FrameLayout.LayoutParams(-1, -2))
+            }, FrameLayout.LayoutParams(-1, -1))
         } else root
         ViewCompat.setOnApplyWindowInsetsListener(host) { view, insets ->
             val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout())
@@ -183,7 +188,12 @@ class MainActivity : ComponentActivity() {
         val card = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
             setPadding(dp(22), dp(20), dp(22), dp(20))
-            background = RippleDrawable(ColorStateList.valueOf(0x22349676), rounded(if (dark) panel else mint, 20), null)
+            val surface = GradientDrawable(GradientDrawable.Orientation.TL_BR,
+                if (dark) intArrayOf(0xFF292C46.toInt(), 0xFF192636.toInt()) else intArrayOf(0xFFC8ECA5.toInt(), 0xFF8CC9B0.toInt())).apply {
+                cornerRadius = dp(22).toFloat()
+                if (dark) setStroke(dp(1), 0xFF3A405B.toInt())
+            }
+            background = RippleDrawable(ColorStateList.valueOf(0x22349676), surface, null)
             isClickable = true; isFocusable = true; minimumHeight = dp(104)
             setOnClickListener { action() }
             contentDescription = "$name. $description"
@@ -192,7 +202,10 @@ class MainActivity : ComponentActivity() {
         copy.addView(label(name, 22f, foreground, true))
         copy.addView(label(description, 14f, if (dark) muted else Color.rgb(45, 64, 31)).apply { setPadding(0, dp(5), dp(12), 0) })
         card.addView(copy, LinearLayout.LayoutParams(0, -2, 1f))
-        card.addView(label(if (dark) "↓" else "↗", 30f, foreground).apply { importantForAccessibility = android.view.View.IMPORTANT_FOR_ACCESSIBILITY_NO })
+        card.addView(ImageView(this).apply {
+            setImageResource(if (dark) R.drawable.ic_scan else R.drawable.ic_send_file)
+            importantForAccessibility = android.view.View.IMPORTANT_FOR_ACCESSIBILITY_NO
+        }, LinearLayout.LayoutParams(dp(32), dp(32)))
         root.addView(card, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(12) })
     }
     private fun toast(value: String) = Toast.makeText(this, value, Toast.LENGTH_LONG).show()
@@ -213,7 +226,20 @@ class MainActivity : ComponentActivity() {
         root.addView(label("Skip the cloud.\nSend with light.", 34f, bold = true).apply { setLineSpacing(0f, 1f) })
         gap(12)
         root.addView(label("Your files. A beam of light. Zero network.", 15f, muted))
-        root.addView(OpticalSignalView(this), LinearLayout.LayoutParams(-1, dp(116)))
+        val signal = OpticalSignalView(this).apply { motionEnabled = this@MainActivity.motionEnabled }
+        root.addView(signal, LinearLayout.LayoutParams(-1, dp(116)))
+        val motion = label("", 11f, muted).apply {
+            gravity = Gravity.CENTER; minHeight = dp(48); isClickable = true; isFocusable = true
+            setOnClickListener {
+                motionEnabled = !motionEnabled
+                signal.motionEnabled = motionEnabled
+                (root.parent.parent as? AmbientLayout)?.motionEnabled = motionEnabled
+                text = if (motionEnabled) "Tap the beam to pulse  ·  Motion on" else "Background motion paused  ·  Tap to enable"
+            }
+            text = if (motionEnabled) "Tap the beam to pulse  ·  Motion on" else "Background motion paused  ·  Tap to enable"
+        }
+        // The root is nested in a ScrollView inside the ambient background container.
+        root.addView(motion)
         actionCard("Send file", "01  /  Turn your screen into a sender", false) { pick.launch("*/*") }
         actionCard("Scan & receive", "02  /  Capture, verify, save automatically", true) {
             if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) receive()
@@ -299,6 +325,7 @@ class MainActivity : ComponentActivity() {
         Choreographer.getInstance().postFrameCallback(callback)
     }
     private fun receive() {
+        verifiedSpeed = null
         layout(); window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         val token = session
         title("Point camera at sender")
@@ -306,6 +333,7 @@ class MainActivity : ComponentActivity() {
         val status = label("Waiting for the first QR frame…", 13f, muted).apply { setPadding(0, dp(16), 0, dp(4)) }; root.addView(status)
         button("STOP") { home() }
         val receiver = Receiver()
+        val speed = ReceiveSpeed()
         val decoder = FrameDecoder()
         val future = ProcessCameraProvider.getInstance(this)
         future.addListener({
@@ -327,17 +355,22 @@ class MainActivity : ComponentActivity() {
                         frames++
                         val text = decoder.decode(proxy)
                         if (text != null) { decoded++; receiver.accept(text) }
+                        if (receiver.received > 0) speed.start(android.os.SystemClock.elapsedRealtime())
                         val result = receiver.complete
                         val failure = receiver.error
                         if (result != null || failure != null || now - lastUi >= 250) {
                             lastUi = now
                             val elapsed = ((now - start) / 1000.0).coerceAtLeast(0.001)
-                            val message = TransferStatus.receiving(receiver.progress, receiver.solved, receiver.received, frames, decoded, elapsed)
+                            val measuredAt = android.os.SystemClock.elapsedRealtime()
+                            val rate = speed.update(measuredAt, receiver.recoveredBytes, receiver.received)
+                            val message = rate + "\n" + TransferStatus.receiving(receiver.progress, receiver.solved, receiver.received, frames, decoded, elapsed)
+                            val finishedRate = if (result != null) speed.verified(measuredAt, result.size) else null
                             main.post {
                                 if (token != session) return@post
                                 status.text = message
                                 if (failure != null) { layout(); title(failure); button("RETRY") { receive() }; button("HOME") { home() } }
                                 else if (result != null) {
+                                    verifiedSpeed = finishedRate
                                     requestSave(result, receiver.filename)
                                 }
                             }
