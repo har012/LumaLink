@@ -99,3 +99,27 @@ All 20 Kotlin tests passed, with zero lint errors (14 warnings) and a successful
 debug APK build. Emulator installation was attempted, but its package service
 failed with Broken pipe and subsequently reported "Can't find service: package".
 Visual interaction and physical optical throughput remain unverified for this revision.
+
+## Optional Wi-Fi Direct transport
+
+Added explicit Light / QR and Wi-Fi Direct selection. Wi-Fi Direct uses Android
+P2P group creation/discovery/connection, a QR-shared session key, explicit receiver
+confirmation and peer selection, authenticated AES-GCM TCP records, file hash
+verification, completion acknowledgement, progress/speed and automatic saving.
+The original optical data path remains selectable without Wi-Fi permission grants.
+
+`testDebugUnitTest lintDebug assembleDebug` passed with 28 Kotlin tests, zero
+failures, zero lint errors and 21 warnings. Production DirectFileTransfer was
+tested over actual JVM loopback sockets, including a 2,000,000-byte exact round
+trip, unauthenticated-client rejection and hash-failure acknowledgement rejection.
+Record tests cover tampering, wrong keys, ordering, truncation and size bounds.
+
+APK permission inspection confirms the newly intentional local-network/Wi-Fi
+permissions, Location permissions capped at API 32, Nearby Wi-Fi Devices and legacy
+storage capped at API 28. No Bluetooth permission is declared. Older camera-only
+permission results in this document refer to earlier revisions.
+
+No two-phone Wi-Fi Direct radio test has been performed. Discovery, OEM connection
+prompts, API-specific permissions, cancellation/group cleanup and achieved KB/s
+remain the physical-device gates in wifi-direct-validation.md. Loopback results
+are not evidence of radio throughput or meeting the 190 KB/s target.

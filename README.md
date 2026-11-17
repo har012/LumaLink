@@ -1,9 +1,14 @@
 # LumaLink
 
-Experimental Android-to-Android optical file transfer. One phone displays QR
-symbols; the other decodes them with its camera. Both phones require LumaLink.
-There is no pairing, return acknowledgement, network transport or Bluetooth.
-The app uses camera permission. Android 8–9 additionally requires storage permission
+Experimental Android-to-Android file transfer with two explicitly selected modes:
+**Light / QR** carries file bytes through animated QR frames; **Wi-Fi Direct**
+uses a QR-authorized local Wi-Fi P2P connection. Both phones require LumaLink.
+Neither mode requires internet, a cloud service or Bluetooth. Wi-Fi Direct requires
+connection negotiation and may show Android's confirmation prompt; Light mode uses no network.
+Camera permission is required for scanning. Wi-Fi Direct additionally requests
+Nearby Wi-Fi Devices on Android 13+, or fine/coarse Location on Android 8–12.
+Android requires INTERNET permission for sockets even for this local transfer;
+the app does not contact external servers. Android 8–9 also requires storage permission
 for automatic saving; that permission is capped at API 28 and is not used on Android 10+.
 
 ## Build
@@ -42,7 +47,7 @@ The verified average runs from the first accepted packet through reconstruction;
 it excludes camera acquisition and saving. Very brief transfers show no numeric
 rate rather than an unstable estimate. Frame/QR/accepted-symbol rates remain visible.
 
-1. Start with a local 1-10 KB file and the default 6 requested FPS.
+1. Select **Light / QR on both phones**. Start with a local 1-10 KB file and the default 6 requested FPS.
 2. Tap SEND FILE on one phone and RECEIVE FILE on the other.
 3. Keep the complete QR and its white border visible, with steady focus and no glare.
 4. After SHA-256 verification, the file saves automatically to the matching LumaLink
@@ -53,6 +58,40 @@ rate rather than an unstable estimate. Frame/QR/accepted-symbol rates remain vis
 Leaving the foreground stops active work. Return HOME and restart after interruption.
 Unsaved received files and transfer state do not survive process death or rotation.
 Use local document providers for a fully offline workflow.
+
+## Wi-Fi Direct mode
+
+This uses Android Wi-Fi P2P, not a shared-router LAN or Wi-Fi hotspot workaround.
+
+1. Install this revision on both physical Android phones. Select **Wi-Fi Direct** on both.
+2. Enable Wi-Fi and grant the requested permissions. Peer discovery may also need
+   the system Location switch enabled; Android 8–12 needs precise Location permission.
+3. Sender: tap Send file and choose a local file up to 10 MB. The app creates a P2P
+   group and displays an authorization QR with the sender's device name.
+4. Receiver: tap Scan & receive, scan that QR and confirm the displayed file.
+5. Select the sender's device name from the nearby list. Accept Android connection
+   prompts if shown. You do not need both phones on the same router.
+6. The file transfers as encrypted TCP records; progress and KB/s appear on screen.
+   SHA-256 verification precedes automatic saving. The sender receives a verification
+   acknowledgement, which confirms reconstruction, not that the subsequent disk save succeeded.
+
+The QR carries a fresh random 256-bit session key, session ID, TCP port, filename,
+size and file hash. A random challenge/HMAC authenticates the receiver to the sender;
+AES-256-GCM authenticates/encrypts each ordered record with session/index binding.
+The receiver uses Android's P2P group-owner address, never an arbitrary QR URL.
+Anyone who sees the authorization QR can possess that session key: share it only
+with the intended receiver. This is a PSK protocol, not TLS or certificate identity.
+
+Offers/connections have a three-minute session deadline and bounded socket timeouts.
+Cancel/backgrounding closes sockets, stops discovery and removes app-created P2P groups.
+Existing P2P groups are rejected rather than silently disconnected. Unsupported
+devices can still use Light mode. Standard Android emulators generally cannot
+validate Wi-Fi Direct: test on two physical P2P-capable phones.
+
+Wi-Fi Direct radio discovery, negotiation and real speed are **not yet device-validated**.
+JVM loopback tests exercise the encrypted file stream, including a 2 MB file, but
+do not establish Wi-Fi throughput or guarantee 190 KB/s. The file-size cap remains 10 MB.
+See [Wi-Fi Direct validation](docs/wifi-direct-validation.md).
 
 ## Improvements over the supplied prototype
 
@@ -80,8 +119,10 @@ not silently discard the verified file. Unsaved files are not persisted across p
 
 ## Performance and reliability limits
 
-**This does not implement or demonstrate 190 KB/s or 60 distinct optically received
-frames per second.** There are no measured phone-pair results yet.
+**190 KB/s and 60 distinct optically received frames per second have not been
+demonstrated on phones.** There are no measured phone-pair results yet. The
+following QR capacity limits apply to Light mode; Wi-Fi Direct has separate
+physical-device validation gates.
 
 420-byte payloads yield at most 25,200 bytes/s at 60 unique accepted packets/s,
 before fountain overhead. A 2,000,000-byte file takes at least 79.4 seconds in this
@@ -95,8 +136,8 @@ Metadata and Base64 still repeat in every QR. Camera FPS/exposure/resolution are
 not explicitly negotiated. Multiple QRs per frame and custom optical grids are
 future experiments, not implemented features.
 
-Packet checksums detect accidental corruption; they do not authenticate senders.
-There is no encryption. Nearby cameras can observe transmissions. Receiver retry
+In Light mode, packet checksums detect accidental corruption; they do not authenticate senders.
+Light mode has no encryption. Nearby cameras can observe transmissions. Receiver retry
 creates a fresh local decoder; it is not an acknowledgement to the sender.
 
 ## Protocol v2

@@ -49,6 +49,27 @@ class MainActivity : ComponentActivity() {
     private var requestedFps = 6
     private var motionEnabled = true
     private var verifiedSpeed: String? = null
+    private var wifiMode = false
+    private var direct: WifiDirectTransfer? = null
+    private var permissionAction: (() -> Unit)? = null
+    private val directPermissions = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { grants ->
+        val action = permissionAction; permissionAction = null
+        if (grants.isNotEmpty() && grants.values.all { it }) action?.invoke() else {
+            layout(); title("Wi-Fi Direct permission needed")
+            root.addView(label("Allow nearby Wi-Fi devices (or Location on Android 8–12) to connect directly. Light mode remains available.", 14f, muted))
+            button("Back to home") { home() }
+        }
+    }
+    private fun withDirectPermission(receiving: Boolean, action: () -> Unit) {
+        if (!packageManager.hasSystemFeature(PackageManager.FEATURE_WIFI_DIRECT)) {
+            toast("Wi-Fi Direct is unavailable on this device. Use Light / QR mode."); return
+        }
+        val required = mutableListOf(if (android.os.Build.VERSION.SDK_INT >= 33) Manifest.permission.NEARBY_WIFI_DEVICES else Manifest.permission.ACCESS_FINE_LOCATION)
+        if (android.os.Build.VERSION.SDK_INT <= 32) required.add(Manifest.permission.ACCESS_COARSE_LOCATION)
+        if (receiving) required.add(Manifest.permission.CAMERA)
+        val missing = required.filter { ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED }
+        if (missing.isEmpty()) action() else { permissionAction = action; directPermissions.launch(missing.toTypedArray()) }
+    }
 
     private val storagePermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         val pending = pendingSave ?: return@registerForActivityResult
@@ -112,7 +133,7 @@ class MainActivity : ComponentActivity() {
                 }
                 main.post {
                     if (token != session) return@post
-                    result.fold({ send(it) }, { toast(it.message ?: "Read failed"); home() })
+                    result.fold({ if (wifiMode) sendDirect(it) else send(it) }, { toast(it.message ?: "Read failed"); home() })
                 }
             }
         }
@@ -137,6 +158,7 @@ class MainActivity : ComponentActivity() {
     }
     private fun stop() {
         session++
+        direct?.close(); direct = null
         work?.cancel(true); work = null
         frameCallback?.let { Choreographer.getInstance().removeFrameCallback(it) }; frameCallback = null
         analyzer?.clearAnalyzer(); analyzer = null
@@ -223,9 +245,9 @@ class MainActivity : ComponentActivity() {
         gap(32)
         root.addView(label("THE OFFLINE TRANSFER LAB", 10f, muted, true).apply { letterSpacing = .12f })
         gap(12)
-        root.addView(label("Skip the cloud.\nSend with light.", 34f, bold = true).apply { setLineSpacing(0f, 1f) })
+        root.addView(label(if (wifiMode) "Skip the cloud.\nGo direct." else "Skip the cloud.\nSend with light.", 34f, bold = true).apply { setLineSpacing(0f, 1f) })
         gap(12)
-        root.addView(label("Your files. A beam of light. Zero network.", 15f, muted))
+        root.addView(label(if (wifiMode) "Your files. Direct Wi-Fi. Zero internet." else "Your files. A beam of light. Zero network.", 15f, muted))
         val signal = OpticalSignalView(this).apply { motionEnabled = this@MainActivity.motionEnabled }
         root.addView(signal, LinearLayout.LayoutParams(-1, dp(116)))
         val motion = label("", 11f, muted).apply {
@@ -240,13 +262,29 @@ class MainActivity : ComponentActivity() {
         }
         // The root is nested in a ScrollView inside the ambient background container.
         root.addView(motion)
-        actionCard("Send file", "01  /  Turn your screen into a sender", false) { pick.launch("*/*") }
+        val modes = LinearLayout(this)
+        for ((title, wifi) in listOf("Light / QR" to false, "Wi-Fi Direct" to true)) {
+            modes.addView(label(title, 14f, if (wifiMode == wifi) paper else muted, true).apply {
+                gravity = Gravity.CENTER; minHeight = dp(52)
+                background = rounded(if (wifiMode == wifi) mint else panel, 14)
+                isClickable = true; isFocusable = true; isSelected = wifiMode == wifi
+                setOnClickListener { wifiMode = wifi; home() }
+            }, LinearLayout.LayoutParams(0, -2, 1f).apply { rightMargin = dp(6) })
+        }
+        root.addView(modes); gap(12)
+        root.addView(label(if (wifiMode) "Direct Wi-Fi connection. No router or internet required. Keep both apps open." else "Camera-only file data. No network connection required.", 12f, muted))
+        gap(16)
+        actionCard("Send file", if (wifiMode) "01  /  Create a direct Wi-Fi offer" else "01  /  Turn your screen into a sender", false) {
+            if (wifiMode) withDirectPermission(false) { pick.launch("*/*") } else pick.launch("*/*")
+        }
         actionCard("Scan & receive", "02  /  Capture, verify, save automatically", true) {
-            if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) receive()
+            if (wifiMode) withDirectPermission(true) { receive() }
+            else if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) receive()
             else permission.launch(Manifest.permission.CAMERA)
         }
+        if (!wifiMode) {
         gap(18)
-        root.addView(label("TRANSMISSION RATE", 11f, muted, true).apply { letterSpacing = .14f })
+        root.addView(label("LIGHT MODE DISPLAY RATE", 11f, muted, true).apply { letterSpacing = .14f })
         gap(12)
         val rates = listOf(6, 15, 30, 60)
         val choices = LinearLayout(this)
@@ -271,10 +309,11 @@ class MainActivity : ComponentActivity() {
         updateRates(); root.addView(choices)
         gap(10)
         root.addView(label("Start at 6 FPS. Higher rates depend on both phones.", 12f, muted))
+        }
         gap(28)
         root.addView(label("SCREEN / CAMERA / SAVED", 12f, bold = true))
         gap(6)
-        root.addView(label("No internet, Bluetooth or pairing. Install LumaLink on both phones to transfer.", 13f, muted))
+        root.addView(label("No internet or Bluetooth. Light mode needs no network; Wi-Fi Direct establishes a local connection. Install LumaLink on both phones.", 13f, muted))
         gap(14)
         root.addView(label("Experimental QR mode · 190 KB/s is not yet supported.", 12f, muted))
     }
@@ -354,6 +393,11 @@ class MainActivity : ComponentActivity() {
                         if (start == 0L) start = now
                         frames++
                         val text = decoder.decode(proxy)
+                        if (wifiMode && text != null) {
+                            val invite = runCatching { DirectInvitation.parse(text) }.getOrNull()
+                            if (invite != null) main.post { if (token == session) confirmDirect(invite) }
+                            return@setAnalyzer
+                        }
                         if (text != null) { decoded++; receiver.accept(text) }
                         if (receiver.received > 0) speed.start(android.os.SystemClock.elapsedRealtime())
                         val result = receiver.complete
@@ -385,12 +429,82 @@ class MainActivity : ComponentActivity() {
             } catch (e: Exception) { if (token == session) receiveError("Camera unavailable", e) }
         }, ContextCompat.getMainExecutor(this))
     }
+    private fun sendDirect(sender: Sender) {
+        layout(); window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        val token = session
+        title("Wi-Fi Direct · Send")
+        val qr = ImageView(this).apply { setBackgroundColor(Color.WHITE); scaleType = ImageView.ScaleType.FIT_CENTER }
+        root.addView(qr, LinearLayout.LayoutParams(-1, 0, 1f))
+        val status = label("Creating offer…", 14f, muted); root.addView(status)
+        button("Cancel transfer") { home() }
+        try {
+            val transfer = WifiDirectTransfer(this, { if (token == session) status.text = it }, { if (token == session) receiveError("Wi-Fi Direct failed", it) })
+            direct = transfer
+            transfer.send(sender, { text, owner ->
+                if (token != session) return@send
+                status.text = "On the receiver, select Wi-Fi Direct and scan this QR.\nSender device: $owner\n${sender.name} · ${sender.bytes.size} bytes\nOnly share this QR with the intended receiver."
+                work = worker.submit {
+                    val encoded = runCatching {
+                        val matrix = QRCodeWriter().encode(text, BarcodeFormat.QR_CODE, 0, 0, mapOf(EncodeHintType.MARGIN to 4, EncodeHintType.CHARACTER_SET to "UTF-8"))
+                        val pixels = IntArray(matrix.width * matrix.height) { i -> if (matrix[i % matrix.width, i / matrix.width]) Color.BLACK else Color.WHITE }
+                        Bitmap.createBitmap(pixels, matrix.width, matrix.height, Bitmap.Config.ARGB_8888)
+                    }
+                    main.post {
+                        if (token != session) return@post
+                        encoded.fold({ qr.setImageDrawable(android.graphics.drawable.BitmapDrawable(resources, it).apply { isFilterBitmap = false }) }, { receiveError("Cannot display Wi-Fi offer", it as? Exception ?: Exception(it)) })
+                    }
+                }
+            }, {
+                if (token == session) {
+                    layout(); title("Receiver verified the file")
+                    root.addView(label("${sender.name} transferred over Wi-Fi Direct. The receiver will save it automatically."))
+                    button("Home") { home() }
+                }
+            })
+        } catch (e: Exception) { receiveError("Wi-Fi Direct unavailable", e) }
+    }
+    private fun confirmDirect(invite: DirectInvitation) {
+        layout(); title("Receive over Wi-Fi Direct?")
+        root.addView(label("${invite.name}\n${invite.size} bytes\nSender: ${invite.owner}", 17f))
+        gap(16)
+        root.addView(label("Confirm the sender, then select their device from the nearby list. Android may ask to approve the connection.", 14f, muted))
+        button("Connect and receive") { discoverDirect(invite) }
+        button("Cancel") { home() }
+    }
+    private fun discoverDirect(invite: DirectInvitation) {
+        layout(); window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        val token = session
+        title("Find the sender")
+        val status = label("Looking for ${invite.owner}…\nEnable Wi-Fi and Location for peer discovery if required by your phone.", 14f, muted)
+        root.addView(status)
+        val peers = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        root.addView(ScrollView(this).apply { addView(peers) }, LinearLayout.LayoutParams(-1, 0, 1f))
+        button("Cancel transfer") { home() }
+        try {
+            val transfer = WifiDirectTransfer(this, { if (token == session) status.text = it }, { if (token == session) receiveError("Wi-Fi Direct failed", it) })
+            direct = transfer
+            transfer.discover(invite, { devices ->
+                if (token == session) {
+                    peers.removeAllViews()
+                    devices.forEach { device ->
+                        peers.addView(Button(this).apply {
+                            text = device.deviceName.ifBlank { "Nearby Wi-Fi device" }; isAllCaps = false
+                            setOnClickListener { peers.removeAllViews(); transfer.connect(device) }
+                        }, LinearLayout.LayoutParams(-1, dp(60)))
+                    }
+                    if (devices.isEmpty()) status.text = "No peers yet. Keep the sender's offer open and both phones nearby."
+                }
+            }, { bytes, name, speed ->
+                if (token == session) { verifiedSpeed = speed; requestSave(bytes, name) }
+            })
+        } catch (e: Exception) { receiveError("Wi-Fi Direct unavailable", e) }
+    }
     private fun receiveError(heading: String, error: Exception) {
         layout(); title(heading)
         root.addView(label(error.message ?: error.javaClass.simpleName, 15f, muted))
         gap(16)
-        root.addView(label("Check camera access and try again. Start the sender at 6 FPS.", 14f, muted))
-        button("Try receiving again") { receive() }
+        root.addView(label(if (wifiMode) "Enable Wi-Fi and nearby-device access. On Android 8–12, also enable Location. Keep both apps open and retry from home." else "Check camera access and try again. Start the sender at 6 FPS.", 14f, muted))
+        if (!wifiMode) button("Try receiving again") { receive() }
         button("Back to home") { home() }
     }
     override fun onStop() { stop(); super.onStop() }
