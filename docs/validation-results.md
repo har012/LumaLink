@@ -152,3 +152,30 @@ No physical phone was connected. Synthetic QR image tests do not demonstrate
 Samsung S24 acquisition, true camera FPS, short exposure or improved optical
 throughput. Those remain device tests in benchmark-protocol.md. Smaller symbols
 trade payload capacity for readability; no high-speed claim is made.
+
+## QR receiving unit tests - 2026-11-18
+
+Added QrReceivingTest, which generates real QR luminance images from Sender frames,
+decodes with production FrameDecoder.decodePixels and feeds production Receiver
+until exact bytes and SHA-256 match. The main test uses three seeds, a 10,000-byte
+file, late joining, random/burst drops, packet reordering/duplicates, all four
+right-angle rotations, mild pixel noise and a luminance gradient.
+
+Command: `gradlew.bat --no-daemon testDebugUnitTest --tests com.lumalink.app.QrReceivingTest`
+
+Result: BUILD SUCCESSFUL; 3 tests passed, 0 failures/errors, JUnit suite time 1.363 s.
+
+| Seed | QR images attempted | Decoded | Dropped after joining | Unique accepted | File hash |
+| --- | ---: | ---: | ---: | ---: | --- |
+| 0 | 110 | 110 | 67 | 93 | PASS |
+| 1 | 93 | 91 | 53 | 81 | PASS |
+| 2 | 113 | 112 | 59 | 95 | PASS |
+
+The other two tests reject a visually readable QR with invalid packet CRC without
+capturing the session, and verify that blank images do not prevent decoding the
+next valid QR. Duplicate packets do not increment accepted counts.
+
+This is a JVM unit/integration test of generated luminance through file reconstruction.
+It does not invoke CameraX/ImageProxy cropping, physical display/camera exposure,
+rolling shutter, motion blur, real lens focus or Samsung S24 hardware. Its runtime
+is not phone transfer throughput. Physical-device validation is still required.
