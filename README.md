@@ -1,4 +1,39 @@
-# LumaLink
+# LumaLink: Offline Android File Transfer via Optical QR and Wi-Fi Direct
+
+## Project description and problem statement
+
+LumaLink explores two ways to move files between nearby Android phones without
+internet, cloud storage or Bluetooth: camera-based optical transfer and a
+QR-authorized Wi-Fi Direct connection. The project began as a light-only transfer
+experiment and expanded to include Wi-Fi Direct because animated QR throughput
+and sustained camera alignment make large optical transfers impractical.
+
+**Problem statement:** Design and evaluate an Android application that lets users
+explicitly choose between network-free animated QR transfer for small files and
+local Wi-Fi Direct transfer intended for larger files. Both modes must reconstruct
+the original bytes, verify file integrity and save received files automatically,
+while making transfer progress, permissions and practical limitations clear.
+Wi-Fi Direct uses a local wireless network even though it needs no internet or
+shared router; only Light mode meets the original no-network requirement.
+
+The original optical goal was at least 190,000 verified file bytes/s for a 2 MB
+image. The current single-QR design does not meet that goal. Wi-Fi Direct is
+implemented as a separate transport, but its phone-to-phone reliability and speed
+still require testing; it is not a validated performance result.
+
+## Practical applications
+
+These are intended applications, not deployment or reliability guarantees.
+
+| Application | Suitable mode | Practical considerations |
+| --- | --- | --- |
+| Share short notes, contact files or small documents without a radio connection | Light / QR | Both phones need LumaLink; the complete QR must remain visible. |
+| Move a small file where a network connection is unavailable or intentionally avoided | Light / QR | Camera/display use must be permitted; optical contents are visible and unencrypted. |
+| Teach visual encoding, packet integrity, fountain recovery and camera processing | Light / QR | Diagnostics and calibration make throughput/readability trade-offs observable. |
+| Share photos, PDFs or other larger files nearby without internet or a shared router | Wi-Fi Direct | Intended use pending physical-device validation; current file cap is 10 MB. |
+| Compare optical and local wireless transport in an Android research prototype | Both | Measure setup time, verified throughput, failure rate and usability separately. |
+
+## Transfer modes and requirements
 
 Experimental Android-to-Android file transfer with two explicitly selected modes:
 **Light / QR** carries file bytes through animated QR frames; **Wi-Fi Direct**
@@ -198,13 +233,79 @@ See [DENSO WAVE capacity](https://www.qrcode.com/en/about/standards.html).
 
 The fountain distribution remains a basic deterministic XOR scheme, not robust
 soliton or RaptorQ. It may stall or recover inefficiently on large transfers.
-Metadata and Base64 still repeat in every QR. Camera FPS/exposure/resolution are
-not explicitly negotiated. Multiple QRs per frame and custom optical grids are
-future experiments, not implemented features.
+In default v4, metadata repeats periodically in manifests; data frames use compact
+Base45 packets. Camera resolution, AE frame range and exposure compensation are
+requested, but device support and actual capture behavior require measurement.
+Multiple QRs per frame and custom optical grids are future experiments, not
+implemented features.
 
 In Light mode, packet checksums detect accidental corruption; they do not authenticate senders.
 Light mode has no encryption. Nearby cameras can observe transmissions. Receiver retry
 creates a fresh local decoder; it is not an acknowledgement to the sender.
+
+## Conclusion: Light / QR transfer only
+
+LumaLink demonstrates the mechanics of offline optical file transfer: converting
+file bytes into animated QR packets, recovering missing blocks with basic XOR
+fountain equations, verifying SHA-256 and saving the reconstructed file. Small
+KB-sized files are the most practical use of the current design. User-reported
+phone trials show that MB-sized transfers require too many symbols and too much
+time holding the phones aligned; these observations are not controlled benchmarks.
+
+**768 bytes per QR symbol** (not 786) is the proposed practical upper working
+profile for this project's conclusion. It means file/equation payload, excluding
+packet and QR encoding overhead. Larger payloads produce denser QR patterns that
+can become difficult or unreadable for a phone camera under the tested conditions.
+This is not a universal QR capacity limit or a validated maximum across phones:
+the app still offers an experimental 1024-byte profile.
+
+**30 FPS** is the proposed upper experimental operating setting for this conclusion.
+Faster changes can become unreadable when exposure, rolling shutter or decoding
+cannot keep up. Reliable reception at 30 FPS has not been established, and even
+lower rates may lose symbols. The app retains a 60 FPS experimental option; its
+presence does not establish usable 60 FPS optical reception.
+
+At 768 payload bytes and 30 unique accepted symbols/s, the ideal payload ceiling
+is **23,040 bytes/s (23.04 decimal KB/s)** before manifests, padding, repeats,
+losses and fountain overhead. A 2,500,000-byte file needs at least **3,256 source
+blocks** and roughly **109 seconds** at that ideal rate. Actual completion takes
+longer. Thousands of symbols and sustained alignment make large handheld optical
+transfers inconvenient; the current implementation cannot promise 190 KB/s.
+
+Wi-Fi Direct was added to explore a more practical path for larger files. These
+optical conclusions do not establish Wi-Fi Direct performance: discovery,
+connection negotiation, compatibility, throughput and successful saving still
+need testing on physical phones.
+
+### Learnings
+
+- Optimize unique recovered file bytes per second, rather than requested FPS or
+  total QR scans. Larger payloads reduce block counts but can reduce readability.
+- Camera capture rate, QR decode rate and accepted-symbol rate are different
+  measurements. Multiple camera reads of one QR are expected, not direct evidence
+  of packet loss; calibration does not eliminate duplicates.
+- Fountain coding helps with missing symbols but cannot decode blurred images;
+  the current basic peeling decoder can also stall on unresolved equations.
+- Longer holds add capture opportunities at the cost of throughput. Calibration
+  must account for both payload density and the actual repeat/hold schedule.
+- Integrity checks, resumable reception, duration estimates and explicit transport
+  selection matter as much as the encoding algorithm for practical usability.
+
+### Possible research areas
+
+- **Adaptive optical transmission:** select payload, dwell and error correction
+  from measured reception; investigate a feedback channel where requirements allow.
+- **Capture and decoding:** benchmark focus/exposure, rolling shutter, scan regions
+  and native decoders across phone pairs under repeatable conditions.
+- **Higher-capacity visual formats:** investigate multi-QR layouts, color encoding
+  and custom optical grids, including their robustness and processing costs.
+- **Recovery efficiency:** compare degree distributions, bounded generations and
+  indexed decoding with the current basic XOR fountain implementation.
+- **Usability and resource costs:** study hands-free alignment, interruption/resume,
+  battery use, thermal effects and realistic completion times.
+- **Wi-Fi Direct validation:** independently test peer discovery, authorization,
+  cancellation, integrity, automatic saving and measured end-to-end throughput
+  before making reliability or speed claims for that mode.
 
 ## Optical protocols
 
@@ -254,8 +355,9 @@ python tools/optical_lab.py capacity
 
 See [the validation protocol](docs/benchmark-protocol.md) for regression coverage,
 physical-device checks, offline verification and end-to-end throughput gates.
-[Local validation results](docs/validation-results.md): 10 passing tests, successful
-debug build, lint with zero errors and 14 warnings; APK permissions checked.
+[Local validation results](docs/validation-results.md): the latest implementation
+revision passed 52 Kotlin tests, a debug build and lint with zero errors and 31
+warnings. These software checks do not establish physical-phone throughput.
 See [implementation status](docs/implementation-plan.md) for audit-to-file mapping
 and remaining priorities.
 Priority: validate builds and API compatibility, quantify fountain overhead at scale,
