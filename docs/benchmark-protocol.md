@@ -4,7 +4,7 @@ No phone-to-phone performance results have been collected for this revision.
 
 ## Optical readability regression
 
-Install the same current APK on sender and receiver; default compact v3 symbols
+Install the same current APK on sender and receiver; default v4 symbols
 are incompatible with old receivers. Test a local 1 KB and 10 KB file at 3 then
 6 FPS on the reported Samsung S24, swapping roles and naming the sender model.
 The first symbol holds for a second; allow autofocus, keep the QR centered, or
@@ -21,6 +21,21 @@ neither camera capture rate nor exact exposure is guaranteed by that request.
 Synthetic QR tests prove only generated-image decoding, not optical reception.
 The smaller default symbols and 3 FPS trade speed for acquisition reliability;
 there is no measured S24 improvement or 190 KB/s claim yet.
+
+For the adaptive revision, follow optical-calibration-and-resume.md first. Compare
+manual profiles against the calibration recommendation on identical geometry.
+Measure Off / every-ID / every-10th-ID holds; count unique accepted file bytes,
+not duplicate QR reads. Verify manifests repeat, late join waits for metadata,
+and selected FPS remains visible beside measured UI slots/s.
+
+Pause receiving, force-stop/reopen, Resume, and verify both solved and pending
+equations reconstruct the exact saved file. Repeat with the sender paused and
+with a restarted sender using the same file/payload; known IDs must be ignored.
+Changed filename/file bytes/payload should not merge with the checkpoint. Test
+Start new, failed saves, legacy storage denial, checkpoint corruption/truncation,
+private-storage exhaustion and successful-save cleanup. Resume speed must exclude
+restored bytes, while total progress includes them. New apps cannot recover old
+in-memory-only progress from earlier versions.
 
 ## Build and correctness
 

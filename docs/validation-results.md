@@ -179,3 +179,43 @@ This is a JVM unit/integration test of generated luminance through file reconstr
 It does not invoke CameraX/ImageProxy cropping, physical display/camera exposure,
 rolling shutter, motion blur, real lens focus or Samsung S24 hardware. Its runtime
 is not phone transfer throughput. Physical-device validation is still required.
+
+## Adaptive optical profiles, calibration, v4 manifests and resume - 2026-11-18
+
+Added selectable 192/384/768/1024-byte profiles, a roughly 35-second stationary/
+moving calibration sequence, deduplicated accepted-payload scoring over measured
+sender display stages and a return result QR. Applying a result sets payload,
+requested FPS and hold policy. Manual changes invalidate the stored estimate;
+settings persist privately across restarts. File review shows first-pass duration
+including manifests/holds and an explicitly optimistic calibration-based estimate.
+
+Default optical protocol is now v4: a CRC-protected manifest before data and every
+16 data symbols; data records carry UUID, sequence and raw payload with CRC.
+Stable identity derives from filename, file SHA-256 and payload size. Legacy v2/v3
+receiving is retained. Older receivers cannot decode v4.
+
+A deadline pacer starts each dwell at presentation and never catches up after
+stalls. Extra holds are off / each new ID once / every 10th new ID once, with a
+500 ms minimum total anchor dwell. Existing source repeats do not get another
+extra hold within the run. Initial manifest acquisition is 1 s; later manifests
+have a 350 ms minimum. UI shows requested FPS and actual UI slot submissions/s.
+
+Private bounded journals persist validated manifests and new packets, replaying
+solved blocks and unresolved fountain equations. Resume supports a new receiver
+and a restarted v4 sender using the same filename/bytes/payload. Incomplete tails
+are truncated to a valid prefix. Checkpoint operations are serialized across
+activity instances; generation checks prevent old writers/saves altering a new
+checkpoint. Successful saving clears the matching journal. Progress survives
+process death after journal writes; this is not an unlimited or power-loss-safe
+database. Wi-Fi Direct resume is unchanged/unsupported.
+
+`testDebugUnitTest lintDebug assembleDebug` passed: **48 Kotlin tests**, zero
+failures, zero lint errors and 31 warnings. The 11 new adaptive tests cover v4
+generated QR decoding at every profile, late/repeated manifests, loss recovery,
+stable identity, pacing/one-time holds, full and incomplete journal restoration,
+pending fountain equations, old-instance ownership rejection, journal size bounds,
+calibration deduplication/scoring and unknown-run/profile handling.
+
+No device or emulator was connected. Actual calibration recommendations, physical
+optical speed, long-hold capture benefits and on-device resume still need testing
+using optical-calibration-and-resume.md. No 190 KB/s or guaranteed-capture claim.

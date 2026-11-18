@@ -56,12 +56,33 @@ rate rather than an unstable estimate. Frame/QR/accepted-symbol rates remain vis
    The completion screen shows the saved path. Android 8–9 may ask for storage permission.
 5. Stop the sender manually. Try higher requested rates only while measuring acceptance.
 
-The default Light sender uses smaller 192-byte symbols in compact optical protocol
-v3 (binary fields + raw bytes + Base45 + CRC32). Legacy v2 receiving is retained,
-but older app versions cannot receive the new symbols. The QR is drawn at an
-integer number of physical pixels per module. The first symbol holds for a second
-for focus; Hold QR for focus pauses on the current symbol until Resume. Source
-blocks repeat alongside new repair equations after the first systematic pass.
+The Light sender now uses optical protocol **v4** with selectable 192/384/768/1024
+byte payloads. A file manifest is shown first and after every 16 data symbols;
+data symbols carry only the UUID, sequence, raw equation bytes and CRC32, encoded
+as Base45. This avoids repeating filenames and full hashes in every data QR.
+Legacy v2/v3 receiving is retained, but old receivers cannot read v4. Update both phones.
+
+The QR uses integer physical pixels per module. A deadline-based pacer displays
+requested FPS next to measured UI slots/s (including manifests and holds). It does
+not catch up with a burst after stalls. The first manifest is held for a second.
+Longer display hold is configurable: off, every new symbol ID once, or every 10th
+ID once (default). The longer dwell is at least 500 ms, applied in one continuous
+slot, not by enqueueing a duplicate. Repeated source IDs do not receive that extra
+dwell again within the same sending run. Hold QR for focus still provides a manual
+pause. Longer holds improve opportunity, not guaranteed decoding, and reduce capacity.
+
+Choose **Calibrate optical link** to measure candidate profiles before a file
+transfer. The receiver scans stationary and moving test QRs, ranks unique accepted
+payload bytes per actual sender-stage second, and displays a result QR. The sender
+scans that result to apply the recommendation. Manual profiles remain available.
+Settings persist across restarts; changing payload/FPS/hold invalidates the stored
+calibration estimate. Recalibrate when phones, distance or lighting change.
+
+Before transmission the app displays file size, source block count and a no-loss
+first-pass display estimate including manifests and holds. A calibration-based
+estimate is shown when available, with repair/repeat caveats. The review screen
+offers Wi-Fi Direct explicitly for large files; no automatic network fallback occurs.
+See [calibration, hold and resume instructions](docs/optical-calibration-and-resume.md).
 
 The receiver requests a 1280x720 analysis stream with device fallback, attempts a
 centered luminance crop before periodic full-frame searches, and uses bulk row
@@ -76,8 +97,17 @@ the last accepted sequence. If QR/s is near zero, investigate capture/readabilit
 if QR/s is high but accepted/s is low, examine duplicate/rejection counts. A sender
 held on one QR naturally produces only one accepted sequence.
 
-Leaving the foreground stops active work. Return HOME and restart after interruption.
-Unsaved received files and transfer state do not survive process death or rotation.
+Leaving the foreground stops active camera/network work. Light reception journals
+validated packets privately; Scan & receive offers Resume or Start new when a
+checkpoint exists, including after process death or rotation. Pause & keep progress
+returns home without discarding it. Use the same sender filename, file bytes and
+payload size; v4 derives a stable ID from those values. FPS/hold can change without
+changing block boundaries. Restarted senders repeat their schedule; keeping the
+sender paused preserves its current position. Wi-Fi Direct is not resumable.
+Only successful automatic saving clears the matching Light checkpoint. A failed
+save keeps it for retry; a checkpoint already containing a complete verified file
+can be restored and saved without rescanning. Checkpoints are bounded to 64 MB/
+120,000 journal records and retain the codec's 100,000 unique-packet limit.
 Use local document providers for a fully offline workflow.
 
 ## Wi-Fi Direct mode
@@ -136,7 +166,8 @@ See [Wi-Fi Direct validation](docs/wifi-direct-validation.md).
 Automatic routing uses common filename extensions (case-insensitive), not content
 inspection. Unknown types go to Download/LumaLink. There is no save-location picker.
 Saving errors keep a Retry saving action; denying legacy storage permission does
-not silently discard the verified file. Unsaved files are not persisted across process death.
+not silently discard the verified file. Light checkpoints persist across process
+death; in-memory Wi-Fi Direct transfers do not.
 
 ## Performance and reliability limits
 
@@ -166,7 +197,18 @@ creates a fresh local decoder; it is not an acknowledgement to the sender.
 
 ## Optical protocols
 
-Default compact v3 frames start with `LL3:` followed by Base45 alphanumeric text.
+Default v4 uses `LL4M:` manifests and `LL4D:` data frames. Both encode their binary
+body plus CRC32 with Base45. The manifest body is UTF-8 JSON with UUID, filename,
+original size, block size and SHA-256. The UUID is deterministically derived from
+filename (up to 100 characters), SHA-256 and block size. Data bodies contain UUID
+(two big-endian longs), sequence (int) and raw payload: only 24 bytes of overhead
+including CRC, versus the previous full metadata on every packet. The decoder
+must receive a matching manifest before accepting data; periodic repeats allow
+late joining. Valid manifests do not reset recovered blocks. Session identity is
+not sender authentication; optical contents and private checkpoint data are not
+encrypted by this app.
+
+Legacy compact v3 frames start with `LL3:` followed by Base45 alphanumeric text.
 Decoded fields are: version byte (3), UUID (two big-endian longs), original length
 (int), block size (unsigned short), sequence (int), SHA-256 (32 raw bytes), UTF-8
 filename length (unsigned short), filename bytes, raw padded equation payload and

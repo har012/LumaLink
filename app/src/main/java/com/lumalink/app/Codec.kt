@@ -31,24 +31,30 @@ object Codec {
     fun packetHash(o: JSONObject): String = hash((listOf("v", "id", "n", "s", "k", "h", "q", "d") + if (o.optInt("v") == 3) listOf("b") else emptyList())
         .joinToString("") { key -> val value = o.get(key).toString(); "${value.length}:$value" }.toByteArray(Charsets.UTF_8))
 }
-class Sender(val name: String, val bytes: ByteArray, val blockSize: Int = Codec.BLOCK) {
+class Sender(val name: String, val bytes: ByteArray, val blockSize: Int = Codec.BLOCK,
+    val id: String = UUID.randomUUID().toString()) {
     init { require(bytes.isNotEmpty() && bytes.size <= Codec.MAX_BYTES && blockSize in 128..1024) }
-    val id: String = UUID.randomUUID().toString()
     val count = (bytes.size + blockSize - 1) / blockSize
     val sha = Codec.hash(bytes)
     private val blocks = Array(count) { i -> bytes.copyOfRange(i * blockSize, min(bytes.size, (i+1)*blockSize)).copyOf(blockSize) }
     fun frame(seq: Int): String {
+        val packet = packet(seq)
+        if (blockSize != Codec.BLOCK) return CompactOpticalPacket.encode(packet.put("b", blockSize))
+        return packet.put("c", Codec.packetHash(packet)).toString()
+    }
+    internal fun packet(seq: Int): JSONObject {
         require(seq >= 0)
         val payload = ByteArray(blockSize)
         for (i in Codec.indices(count, seq)) Codec.xor(payload, blocks[i])
         val packet = JSONObject().put("v",if (blockSize == Codec.BLOCK) 2 else 3).put("id",id).put("n",name.take(100)).put("s",bytes.size).put("k",count)
             .put("h",sha).put("q",seq).put("d",Codec.b64(payload))
-        if (blockSize != Codec.BLOCK) return CompactOpticalPacket.encode(packet.put("b", blockSize))
-        return packet.put("c", Codec.packetHash(packet)).toString()
+        return packet.put("b", blockSize)
     }
 }
 class Receiver {
-    enum class PacketResult { ACCEPTED, DUPLICATE, INVALID, FOREIGN, FINISHED }
+    enum class PacketResult { ACCEPTED, DUPLICATE, INVALID, FOREIGN, FINISHED, MANIFEST, NEED_MANIFEST }
+    private val wire = OpticalV4.Decoder()
+    val manifestPacket get() = wire.lastManifest
     var lastPacketResult = PacketResult.INVALID; private set
     var lastSequence = -1; private set
     enum class State { WAITING, RECEIVING, COMPLETE, FAILED }
@@ -75,7 +81,13 @@ class Receiver {
         lastPacketResult = PacketResult.INVALID
         if (state == State.FAILED || state == State.COMPLETE) { lastPacketResult = PacketResult.FINISHED; return false }
         if (raw.length > 4096) return false
-        val o = try { JSONObject(if (raw.startsWith("LL3:")) CompactOpticalPacket.decode(raw) else raw) } catch (_: Exception) { return false }
+        val normalized = try {
+            if (raw.startsWith("LL4")) wire.normalize(raw) ?: run {
+                lastPacketResult = if (wire.waitingForManifest) PacketResult.NEED_MANIFEST else PacketResult.MANIFEST
+                return false
+            } else if (raw.startsWith("LL3:")) CompactOpticalPacket.decode(raw) else raw
+        } catch (_: Exception) { return false }
+        val o = try { JSONObject(normalized) } catch (_: Exception) { return false }
         fun integer(key: String): Boolean = o.opt(key) is Int
         if (!listOf("v", "s", "k", "q").all(::integer)) return false
         if (!listOf("id", "n", "h", "d", "c").all { o.opt(it) is String }) return false

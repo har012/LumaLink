@@ -61,6 +61,28 @@ class MainActivity : ComponentActivity() {
     private var pendingSave: Pair<ByteArray, String>? = null
     private val saveExecutor = Executors.newSingleThreadExecutor()
     private var requestedFps = 3
+    private var selectedPayload = 192
+    private var holdEvery = 10
+    private var calibratedRate: Double? = null
+    private var calibrationInfo: TextView? = null
+    private fun invalidateCalibration() {
+        calibratedRate = null
+        calibrationInfo?.text = "Profile changed. Recalibrate for a matching estimate."
+    }
+    private var scanPurpose = 0 // 0=file, 1=calibration samples, 2=calibration result
+    private val checkpoint by lazy { OpticalCheckpoint(java.io.File(filesDir, "optical-resume.journal")) }
+    private var completedCheckpoint: String? = null
+    private fun opticalProfile() = OpticalProfile(selectedPayload, requestedFps, holdEvery)
+    private fun persistOpticalProfile() {
+        getPreferences(MODE_PRIVATE).edit().putInt("payload", selectedPayload).putInt("fps", requestedFps)
+            .putInt("holdEvery", holdEvery).putFloat("calibratedRate", calibratedRate?.toFloat() ?: -1f).apply()
+    }
+    private fun opticalChoices(items: List<String>) = object : ArrayAdapter<String>(this, android.R.layout.simple_spinner_dropdown_item, items) {
+        override fun getView(position: Int, convertView: android.view.View?, parent: android.view.ViewGroup): android.view.View =
+            super.getView(position, convertView, parent).apply { (this as? TextView)?.setTextColor(ink) }
+        override fun getDropDownView(position: Int, convertView: android.view.View?, parent: android.view.ViewGroup): android.view.View =
+            super.getDropDownView(position, convertView, parent).apply { setBackgroundColor(Color.WHITE); (this as? TextView)?.setTextColor(Color.BLACK) }
+    }
     private var motionEnabled = true
     private var verifiedSpeed: String? = null
     private var wifiMode = false
@@ -108,9 +130,11 @@ class MainActivity : ComponentActivity() {
         layout(); title("Saving verified file...")
         val saveScreen = root
         val appContext = applicationContext
+        val savedCheckpoint = completedCheckpoint
         // Finish an in-progress disk write even if the activity goes into the background.
         saveExecutor.submit {
             val result = runCatching { ReceivedFileWriter(appContext).save(data, name) }
+            if (result.isSuccess) runCatching { checkpoint.clear(savedCheckpoint) }
             main.post {
                 if (root !== saveScreen || isDestroyed) return@post
                 layout()
@@ -143,11 +167,12 @@ class MainActivity : ComponentActivity() {
                         }
                         output.toByteArray()
                     } ?: error("Cannot read file")
-                    Sender(name, data, if (wifiMode) Codec.BLOCK else 192)
+                    if (wifiMode) Sender(name, data) else Sender(name, data, selectedPayload,
+                        OpticalV4.sessionId(name, Codec.hash(data), selectedPayload))
                 }
                 main.post {
                     if (token != session) return@post
-                    result.fold({ if (wifiMode) sendDirect(it) else send(it) }, { toast(it.message ?: "Read failed"); home() })
+                    result.fold({ if (wifiMode) sendDirect(it) else reviewOptical(it) }, { toast(it.message ?: "Read failed"); home() })
                 }
             }
         }
@@ -163,6 +188,11 @@ class MainActivity : ComponentActivity() {
     private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        val saved = getPreferences(MODE_PRIVATE)
+        runCatching { OpticalProfile(saved.getInt("payload", 192), saved.getInt("fps", 3), saved.getInt("holdEvery", 10)) }.getOrNull()?.let {
+            selectedPayload = it.payload; requestedFps = it.fps; holdEvery = it.holdEvery
+            calibratedRate = saved.getFloat("calibratedRate", -1f).toDouble().takeIf { rate -> rate > 0 && rate.isFinite() }
+        }
         WindowCompat.setDecorFitsSystemWindows(window, false)
         WindowCompat.getInsetsController(window, window.decorView).apply {
             isAppearanceLightStatusBars = false
@@ -249,6 +279,8 @@ class MainActivity : ComponentActivity() {
     }
     private fun toast(value: String) = Toast.makeText(this, value, Toast.LENGTH_LONG).show()
     private fun home() {
+        scanPurpose = 0
+        calibrationInfo = null
         layout(scrollable = true)
         val brand = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
         brand.addView(ImageView(this).apply {
@@ -299,6 +331,41 @@ class MainActivity : ComponentActivity() {
             else permission.launch(Manifest.permission.CAMERA)
         }
         if (!wifiMode) {
+        button("Calibrate optical link") { calibrationMenu() }
+        root.addView(label("PAYLOAD PER SYMBOL", 11f, muted, true))
+        val sizes = listOf(192, 384, 768, 1024)
+        root.addView(Spinner(this).apply {
+            adapter = opticalChoices(sizes.map { "$it bytes${if (it == 192) " · easier to scan" else ""}" })
+            minimumHeight = dp(52); background = rounded(panel, 12)
+            setSelection(sizes.indexOf(selectedPayload))
+            onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+                override fun onNothingSelected(parent: AdapterView<*>?) = Unit
+                override fun onItemSelected(parent: AdapterView<*>?, view: android.view.View?, position: Int, id: Long) {
+                    if (selectedPayload != sizes[position]) invalidateCalibration()
+                    selectedPayload = sizes[position]
+                    persistOpticalProfile()
+                }
+            }
+        })
+        root.addView(label("LONGER DISPLAY HOLD", 11f, muted, true))
+        val holdOptions = listOf(0, 1, 10)
+        root.addView(Spinner(this).apply {
+            adapter = opticalChoices(listOf("Off", "Every new symbol once · at least 500 ms", "Every 10th new symbol once · at least 500 ms"))
+            minimumHeight = dp(52); background = rounded(panel, 12)
+            setSelection(holdOptions.indexOf(holdEvery))
+            onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+                override fun onNothingSelected(parent: AdapterView<*>?) = Unit
+                override fun onItemSelected(parent: AdapterView<*>?, view: android.view.View?, position: Int, id: Long) {
+                    if (holdEvery != holdOptions[position]) invalidateCalibration()
+                    holdEvery = holdOptions[position]
+                    persistOpticalProfile()
+                }
+            }
+        })
+        calibratedRate?.let {
+            calibrationInfo = label("Calibration: %.1f accepted payload KB/s; file recovery may be slower.".format(java.util.Locale.US, it / 1000), 12f, muted)
+            root.addView(calibrationInfo)
+        }
         gap(18)
         root.addView(label("LIGHT MODE DISPLAY RATE", 11f, muted, true).apply { letterSpacing = .14f })
         gap(12)
@@ -317,14 +384,14 @@ class MainActivity : ComponentActivity() {
         rates.forEachIndexed { index, rate ->
             val chip = label("$rate FPS", 14f, bold = true).apply {
                 gravity = Gravity.CENTER; minHeight = dp(52); isClickable = true; isFocusable = true
-                setOnClickListener { requestedFps = rate; updateRates() }
+                setOnClickListener { if (requestedFps != rate) invalidateCalibration(); requestedFps = rate; persistOpticalProfile(); updateRates() }
             }
             chips.add(chip)
             choices.addView(chip, LinearLayout.LayoutParams(0, -2, 1f).apply { if (index > 0) leftMargin = dp(8) })
         }
         updateRates(); root.addView(choices)
         gap(10)
-        root.addView(label("Reliable mode: smaller QR frames. Start at 3 FPS; update both phones.", 12f, muted))
+        root.addView(label("Calibrate both phones before increasing payload or FPS. Longer holds improve opportunity, not guaranteed capture.\nPartial Light reception is checkpointed privately for Resume.", 12f, muted))
         }
         gap(28)
         root.addView(label("SCREEN / CAMERA / SAVED", 12f, bold = true))
@@ -332,6 +399,110 @@ class MainActivity : ComponentActivity() {
         root.addView(label("No internet or Bluetooth. Light mode needs no network; Wi-Fi Direct establishes a local connection. Install LumaLink on both phones.", 13f, muted))
         gap(14)
         root.addView(label("Experimental QR mode · 190 KB/s is not yet supported.", 12f, muted))
+    }
+    private fun reviewOptical(sender: Sender) {
+        layout(scrollable = true); title("Review optical transfer")
+        root.addView(label("${sender.name}\n${sender.bytes.size} bytes · ${sender.count} source blocks\n${sender.blockSize} bytes/symbol · $requestedFps FPS requested", 17f))
+        gap(16)
+        root.addView(label(opticalProfile().estimate(sender.bytes.size), 15f, muted))
+        calibratedRate?.let { root.addView(label("At calibration's accepted-payload rate: at least %.1f min; repeats/repairs may add time.".format(java.util.Locale.US, sender.bytes.size / it / 60), 14f, muted)) }
+        root.addView(label("For large files, Wi-Fi Direct avoids holding the camera for long periods. Resume requires the same file name, contents and payload size on the sender.", 14f, muted))
+        button("Start Light transfer") { send(sender) }
+        button("Use Wi-Fi Direct instead") { wifiMode = true; withDirectPermission(false) { sendDirect(sender) } }
+        button("Back") { home() }
+    }
+    private fun renderQr(text: String): Bitmap {
+        val matrix = QRCodeWriter().encode(text, BarcodeFormat.QR_CODE, 0, 0,
+            mapOf(EncodeHintType.ERROR_CORRECTION to ErrorCorrectionLevel.L, EncodeHintType.MARGIN to 4, EncodeHintType.CHARACTER_SET to "UTF-8"))
+        return Bitmap.createBitmap(IntArray(matrix.width * matrix.height) { i -> if (matrix[i % matrix.width, i / matrix.width]) Color.BLACK else Color.WHITE }, matrix.width, matrix.height, Bitmap.Config.ARGB_8888)
+    }
+    private fun calibrationMenu() {
+        layout(scrollable = true); title("Calibrate the optical link")
+        root.addView(label("On the receiver choose Scan test QRs first. On the sender choose Show test QRs. Keep the phones in the same position throughout the roughly 35-second test.\n\nThe receiver ranks unique accepted payload bytes per actual display second, including the current hold setting. This measures the optical channel, not fountain recovery speed.", 15f, muted))
+        button("Show test QRs · sender") { showCalibration() }
+        button("Scan test QRs · receiver") { startCalibrationScan(1) }
+        button("Scan result QR · sender") { startCalibrationScan(2) }
+        button("Back") { home() }
+    }
+    private fun startCalibrationScan(purpose: Int) {
+        scanPurpose = purpose; wifiMode = false
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) receive(false)
+        else permission.launch(Manifest.permission.CAMERA)
+    }
+    private fun applyCalibration(result: OpticalCalibration.Recommendation) {
+        selectedPayload = result.profile.payload; requestedFps = result.profile.fps
+        holdEvery = result.profile.holdEvery; calibratedRate = result.bytesPerSecond
+        persistOpticalProfile()
+    }
+    private fun calibrationResult(result: OpticalCalibration.Recommendation) {
+        layout(); title("Calibration recommendation")
+        root.addView(label("${result.profile.payload} bytes · ${result.profile.fps} FPS · hold every ${result.profile.holdEvery}\n%.1f accepted payload KB/s".format(java.util.Locale.US, result.bytesPerSecond / 1000), 18f))
+        val qr = QrDisplayView(this); root.addView(qr, LinearLayout.LayoutParams(-1, 0, 1f))
+        root.addView(label("Have the sender choose Calibrate → Scan result QR. Apply the profile there. Actual file recovery can be slower.", 14f, muted))
+        val token = session
+        work = worker.submit {
+            val bitmap = runCatching { renderQr(result.encode()) }
+            main.post { if (token == session) bitmap.fold(qr::setSymbol, { toast("Cannot render result QR") }) }
+        }
+        button("Apply on this phone") { applyCalibration(result); home() }
+        button("Home") { home() }
+    }
+    private data class CalibrationFrame(val candidate: Int, val sequence: Int, val bitmap: Bitmap?, val dwell: Long)
+    private fun showCalibration() {
+        layout(); window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        window.attributes = window.attributes.apply { screenBrightness = .9f }
+        val token = session; val run = java.util.UUID.randomUUID().toString()
+        title("Optical calibration · sender")
+        val qr = QrDisplayView(this); root.addView(qr, LinearLayout.LayoutParams(-1, 0, 1f))
+        val status = label("Preparing test sequence…", 14f, muted); root.addView(status)
+        button("Cancel") { home() }
+        val queue = ArrayBlockingQueue<CalibrationFrame>(2)
+        val holds = holdEvery
+        work = worker.submit {
+            try {
+                OpticalCalibration.candidates.forEachIndexed { index, (payload, fps) ->
+                    queue.put(CalibrationFrame(index, -1, renderQr(OpticalCalibration.packet(run, index, -1)), 1_000_000_000))
+                    val profile = OpticalProfile(payload, fps, holds)
+                    var duration = 0L; var sequence = 0
+                    while (duration < 4_000_000_000L && !Thread.currentThread().isInterrupted) {
+                        val dwell = profile.dwellNanos(sequence, true)
+                        queue.put(CalibrationFrame(index, sequence, renderQr(OpticalCalibration.packet(run, index, sequence)), dwell))
+                        duration += dwell; sequence++
+                    }
+                }
+                queue.put(CalibrationFrame(-1, 0, null, 0))
+            } catch (_: InterruptedException) { Thread.currentThread().interrupt() }
+            catch (e: Exception) { main.post { if (token == session) { layout(); title("Calibration failed"); root.addView(label(e.message ?: "Encoding failed")); button("Home") { home() } } } }
+        }
+        val durations = LongArray(OpticalCalibration.candidates.size)
+        var current = -1; var movingStart = 0L; var deadline = Long.MIN_VALUE
+        val callback = object : Choreographer.FrameCallback {
+            override fun doFrame(time: Long) {
+                if (token != session) return
+                if (time >= deadline) {
+                    queue.poll()?.let { frame ->
+                        if (frame.candidate != current && current >= 0 && movingStart > 0) {
+                            durations[current] = ((time - movingStart) / 1_000_000).coerceAtLeast(1); movingStart = 0
+                        }
+                        if (frame.candidate == -1) {
+                            status.text = "Test finished. Keep the receiver scanning this final QR to calculate its recommendation."
+                            work = worker.submit {
+                                val end = runCatching { renderQr(OpticalCalibration.finish(run, durations, holds)) }
+                                main.post { if (token == session) end.fold(qr::setSymbol, { toast("Cannot render calibration summary") }) }
+                            }
+                            return
+                        }
+                        current = frame.candidate
+                        if (frame.sequence == 0) movingStart = time
+                        val (payload, fps) = OpticalCalibration.candidates[current]
+                        qr.setSymbol(frame.bitmap!!); deadline = time + frame.dwell
+                        status.text = "Profile ${current + 1}/${durations.size} · $payload bytes · $fps FPS\n${if (frame.sequence < 0) "Stationary acquisition check" else "Moving sample #${frame.sequence}"} · extra hold setting $holds"
+                    }
+                }
+                Choreographer.getInstance().postFrameCallback(this)
+            }
+        }
+        frameCallback = callback; Choreographer.getInstance().postFrameCallback(callback)
     }
     private fun send(sender: Sender) {
         layout(); window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
@@ -347,36 +518,38 @@ class MainActivity : ComponentActivity() {
             setOnClickListener { paused = !paused; text = if (paused) "Resume transfer" else "Hold QR for focus" }
         }, LinearLayout.LayoutParams(-1, dp(48)))
         button("STOP") { home() }
-        val queue = ArrayBlockingQueue<Pair<Int, Bitmap>>(2)
+        val profile = opticalProfile()
+        val pacer = OpticalPacer(profile)
+        val queue = ArrayBlockingQueue<Triple<Int, Bitmap, Boolean>>(2)
         work = worker.submit {
             try {
-                val writer = QRCodeWriter()
-                val hints = mapOf(EncodeHintType.ERROR_CORRECTION to ErrorCorrectionLevel.L, EncodeHintType.MARGIN to 4,
-                    EncodeHintType.CHARACTER_SET to "UTF-8")
                 var emission = 0L
+                var manifestDue = true; var sinceManifest = 0
                 while (!Thread.currentThread().isInterrupted && token == session) {
-                    val seq = LightSchedule.sequence(sender.count, emission++)
-                    val matrix = writer.encode(sender.frame(seq), BarcodeFormat.QR_CODE, 0, 0, hints)
-                    val pixels = IntArray(matrix.width * matrix.height) { i -> if (matrix[i % matrix.width, i / matrix.width]) 0xff000000.toInt() else 0xffffffff.toInt() }
-                    queue.put(seq to Bitmap.createBitmap(pixels, matrix.width, matrix.height, Bitmap.Config.ARGB_8888))
+                    val manifest = manifestDue
+                    val seq = if (manifest) -1 else LightSchedule.sequence(sender.count, emission++)
+                    val text = if (manifest) OpticalV4.manifest(sender) else OpticalV4.data(sender, seq)
+                    if (manifest) { manifestDue = false; sinceManifest = 0 } else if (++sinceManifest >= 16) manifestDue = true
+                    queue.put(Triple(seq, renderQr(text), manifest))
                 }
             } catch (_: InterruptedException) { Thread.currentThread().interrupt() }
             catch (e: Exception) { main.post { if (token == session) { toast(e.message ?: "Encoding failed"); home() } } }
         }
-        val interval = 1_000_000_000L / requestedFps
-        var last = 0L
         var first = 0L
         var submitted = 0
         val callback = object : Choreographer.FrameCallback {
             override fun doFrame(time: Long) {
                 if (token != session) return
-                if (!paused && (last == 0L || (time - first >= 1_000_000_000L && time - last >= interval - 500_000L))) {
-                    queue.poll()?.let { (seq, bitmap) ->
+                if (!paused && pacer.ready(time)) {
+                    queue.poll()?.let { (seq, bitmap, manifest) ->
                         qr.setSymbol(bitmap)
-                        last = time; if (first == 0L) first = time
+                        pacer.presented(time, seq, manifest, first == 0L)
+                        if (first == 0L) first = time
                         submitted++
                         val fps = if (time == first) 0.0 else (submitted - 1) * 1e9 / (time - first)
-                        status.text = "Symbol $seq | %.1f UI submissions/s\n%d bytes; %d blocks".format(fps, sender.bytes.size, sender.count)
+                        status.text = "%s · %d FPS requested · %.1f UI slots/s\n%d B/symbol · hold %s · %d source blocks".format(java.util.Locale.US,
+                            if (manifest) "File manifest" else "Symbol $seq", profile.fps, fps, sender.blockSize,
+                            if (profile.holdEvery == 0) "off" else "every ${profile.holdEvery} once", sender.count)
                     }
                 }
                 Choreographer.getInstance().postFrameCallback(this)
@@ -385,17 +558,54 @@ class MainActivity : ComponentActivity() {
         frameCallback = callback
         Choreographer.getInstance().postFrameCallback(callback)
     }
-    private fun receive() {
+    private fun receive(resume: Boolean? = null) {
+        if (!wifiMode && scanPurpose == 0 && resume == null && checkpoint.exists()) {
+            android.app.AlertDialog.Builder(this).setTitle("Resume saved Light reception?")
+                .setMessage("Resume restores recovered blocks. Start new replaces the checkpoint only when valid packets arrive. Use the same file and payload profile on the sender.")
+                .setPositiveButton("Resume") { _, _ -> receive(true) }
+                .setNegativeButton("Start new") { _, _ -> receive(false) }
+                .setNeutralButton("Cancel", null).show()
+            return
+        }
+        if (resume == true && !wifiMode && scanPurpose == 0) {
+            layout(); title("Restoring received blocks…")
+            button("Cancel restore") { home() }
+            val token = session
+            work = worker.submit {
+                val restored = Receiver()
+                val result = runCatching { checkpoint.restore(restored) }
+                main.post {
+                    if (token != session) return@post
+                    result.fold({
+                        if (restored.complete != null) {
+                            completedCheckpoint = checkpoint.identity(); requestSave(restored.complete!!, restored.filename)
+                        } else openReceiver(restored, true)
+                    }, { error ->
+                        layout(); title("Cannot restore checkpoint")
+                        root.addView(label(error.message ?: "Invalid checkpoint", 14f, muted))
+                        button("Discard checkpoint") { checkpoint.discard(); home() }
+                        button("Home") { home() }
+                    })
+                }
+            }
+        } else openReceiver(Receiver(), false)
+    }
+    private fun openReceiver(receiver: Receiver, resumed: Boolean) {
         verifiedSpeed = null
+        completedCheckpoint = null
         layout(); window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         val token = session
-        title("Point camera at sender")
+        title(when (scanPurpose) { 1 -> "Scan calibration sequence"; 2 -> "Scan receiver's result QR"; else -> "Point camera at sender" })
         val view = PreviewView(this).apply { scaleType = PreviewView.ScaleType.FIT_CENTER }
         root.addView(view, LinearLayout.LayoutParams(-1,0,1f))
         val status = label("Waiting for the first QR frame…", 13f, muted).apply { setPadding(0, dp(16), 0, dp(4)) }; root.addView(status)
-        button("STOP") { home() }
-        val receiver = Receiver()
+        button(if (!wifiMode && scanPurpose == 0) "Pause & keep progress" else "Stop") { home() }
+        var journalStarted = resumed
+        var journalManifest = if (resumed) receiver.manifestPacket else null
+        val calibration = OpticalCalibration.Meter()
         val speed = ReceiveSpeed()
+        val restoredBytes = receiver.recoveredBytes
+        val restoredAccepted = receiver.received
         val decoder = FrameDecoder()
         val future = ProcessCameraProvider.getInstance(this)
         future.addListener({
@@ -424,6 +634,30 @@ class MainActivity : ComponentActivity() {
                         val decodeStart = System.nanoTime()
                         val text = decoder.decode(proxy)
                         decodeNanos += System.nanoTime() - decodeStart
+                        if (!wifiMode && scanPurpose != 0) {
+                            if (text != null) {
+                                if (scanPurpose == 1 && (text.startsWith("LLCT:") || text.startsWith("LLCE:"))) {
+                                    val score = runCatching { calibration.accept(text) }
+                                    main.post {
+                                        if (token != session) return@post
+                                        score.fold({ recommendation ->
+                                            if (recommendation != null) calibrationResult(recommendation)
+                                            else status.text = "${calibration.count} unique calibration symbols read. Keep scanning until the result appears."
+                                        }, { error -> if (text.startsWith("LLCE:")) { layout(); title("Calibration incomplete"); root.addView(label(error.message ?: "Retry calibration")); button("Home") { home() } } })
+                                    }
+                                } else if (scanPurpose == 2 && text.startsWith("LLCR:")) {
+                                    runCatching { OpticalCalibration.recommendation(text) }.getOrNull()?.let { result ->
+                                        main.post { if (token == session) {
+                                            layout(); title("Apply calibration?")
+                                            root.addView(label("${result.profile.payload} bytes · ${result.profile.fps} FPS\n%.1f accepted payload KB/s".format(java.util.Locale.US, result.bytesPerSecond / 1000)))
+                                            button("Apply profile") { applyCalibration(result); home() }
+                                            button("Cancel") { home() }
+                                        } }
+                                    }
+                                }
+                            }
+                            return@setAnalyzer
+                        }
                         if (wifiMode && text != null) {
                             val invite = runCatching { DirectInvitation.parse(text) }.getOrNull()
                             if (invite != null) main.post { if (token == session) confirmDirect(invite) }
@@ -434,6 +668,16 @@ class MainActivity : ComponentActivity() {
                             val fecStart = System.nanoTime()
                             receiver.accept(text)
                             fecNanos += System.nanoTime() - fecStart
+                            if (!wifiMode && (receiver.lastPacketResult == Receiver.PacketResult.ACCEPTED || receiver.lastPacketResult == Receiver.PacketResult.MANIFEST)) {
+                                if (!journalStarted) {
+                                    checkpoint.reset(); journalStarted = true
+                                    if (!text.startsWith("LL4M:")) receiver.manifestPacket?.let(checkpoint::append)
+                                }
+                                if (receiver.lastPacketResult == Receiver.PacketResult.ACCEPTED || text != journalManifest) {
+                                    checkpoint.append(text)
+                                    if (text.startsWith("LL4M:")) journalManifest = text
+                                }
+                            }
                             when (receiver.lastPacketResult) {
                                 Receiver.PacketResult.DUPLICATE -> duplicates++
                                 Receiver.PacketResult.INVALID -> rejected++
@@ -441,25 +685,31 @@ class MainActivity : ComponentActivity() {
                                 else -> Unit
                             }
                         }
-                        if (receiver.received > 0) speed.start(android.os.SystemClock.elapsedRealtime())
+                        if (receiver.received > restoredAccepted) speed.start(android.os.SystemClock.elapsedRealtime())
                         val result = receiver.complete
                         val failure = receiver.error
                         if (result != null || failure != null || now - lastUi >= 250) {
                             lastUi = now
                             val elapsed = ((now - start) / 1000.0).coerceAtLeast(0.001)
                             val measuredAt = android.os.SystemClock.elapsedRealtime()
-                            val rate = speed.update(measuredAt, receiver.recoveredBytes, receiver.received)
+                            val rate = speed.update(measuredAt, receiver.recoveredBytes - restoredBytes, receiver.received - restoredAccepted)
                             val diagnostic = "\n%s · decode %.1f ms · FEC %.1f ms\nDuplicates %d · rejected %d · other session %d\nLast accepted #%d · Tap preview to focus".format(java.util.Locale.US,
                                 decoder.resolution, decodeNanos / 1e6 / frames, if (decoded == 0L) 0.0 else fecNanos / 1e6 / decoded,
                                 duplicates, rejected, foreign, receiver.lastSequence)
-                            val message = rate + "\n" + TransferStatus.receiving(receiver.progress, receiver.solved, receiver.received, frames, decoded, elapsed) + diagnostic
-                            val finishedRate = if (result != null) speed.verified(measuredAt, result.size) else null
+                            val hint = when (receiver.lastPacketResult) {
+                                Receiver.PacketResult.NEED_MANIFEST -> "\nWaiting for periodic file manifest…"
+                                Receiver.PacketResult.FOREIGN -> "\nDifferent transfer: use the same file and payload profile to resume."
+                                else -> if (resumed) "\nResumed · ${receiver.received} total accepted · ${receiver.filename}" else "\nProgress checkpointed privately"
+                            }
+                            val message = rate + "\n" + TransferStatus.receiving(receiver.progress, receiver.solved, receiver.received - restoredAccepted, frames, decoded, elapsed) + diagnostic + hint
+                            val finishedRate = if (result != null) speed.verified(measuredAt, result.size - restoredBytes).let { if (resumed) it.replace("Verified transfer", "Verified remaining transfer") else it } else null
                             main.post {
                                 if (token != session) return@post
                                 status.text = message
                                 if (failure != null) { layout(); title(failure); button("RETRY") { receive() }; button("HOME") { home() } }
                                 else if (result != null) {
                                     verifiedSpeed = finishedRate
+                                    completedCheckpoint = checkpoint.identity()
                                     requestSave(result, receiver.filename)
                                 }
                             }
