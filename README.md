@@ -65,16 +65,21 @@ Legacy v2/v3 receiving is retained, but old receivers cannot read v4. Update bot
 The QR uses integer physical pixels per module. A deadline-based pacer displays
 requested FPS next to measured UI slots/s (including manifests and holds). It does
 not catch up with a burst after stalls. The first manifest is held for a second.
-Longer display hold is configurable: off, every new symbol ID once, or every 10th
-ID once (default). The longer dwell is at least 500 ms, applied in one continuous
-slot, not by enqueueing a duplicate. Repeated source IDs do not receive that extra
-dwell again within the same sending run. Hold QR for focus still provides a manual
-pause. Longer holds improve opportunity, not guaranteed decoding, and reduce capacity.
+Longer display hold has two options: **Off** (default/best throughput) and **Random
+later appearance**. Random mode chooses the 2nd, 3rd or 4th appearance independently
+for each ID and holds it for at least 500 ms exactly once, never on its first
+appearance. It deliberately sends four interleaved appearances per ID so the chosen
+later appearance can occur. This adds repeats and can be substantially slower;
+it does not guarantee capture or eliminate duplicates. Every-10th hold is removed;
+previous every-10th preferences migrate to Off. Manual Hold QR for focus is retained.
 
 Choose **Calibrate optical link** to measure candidate profiles before a file
 transfer. The receiver scans stationary and moving test QRs, ranks unique accepted
 payload bytes per actual sender-stage second, and displays a result QR. The sender
 scans that result to apply the recommendation. Manual profiles remain available.
+Calibration uses the same repeat/hold policy as file transmission. With holds off
+it takes roughly 35 seconds; random repeats take longer. Earlier calibration
+results are invalidated: update both apps and recalibrate after this policy change.
 Settings persist across restarts; changing payload/FPS/hold invalidates the stored
 calibration estimate. Recalibrate when phones, distance or lighting change.
 
@@ -82,6 +87,8 @@ Before transmission the app displays file size, source block count and a no-loss
 first-pass display estimate including manifests and holds. A calibration-based
 estimate is shown when available, with repair/repeat caveats. The review screen
 offers Wi-Fi Direct explicitly for large files; no automatic network fallback occurs.
+Files of 1 MB or more additionally show a prominent Wi-Fi Direct recommendation
+and require explicit confirmation before continuing with slow optical transfer.
 See [calibration, hold and resume instructions](docs/optical-calibration-and-resume.md).
 
 The receiver requests a 1280x720 analysis stream with device fallback, attempts a
@@ -96,6 +103,10 @@ packet validation/fountain latency, duplicate/rejected/foreign-session counts an
 the last accepted sequence. If QR/s is near zero, investigate capture/readability;
 if QR/s is high but accepted/s is low, examine duplicate/rejection counts. A sender
 held on one QR naturally produces only one accepted sequence.
+Repeat diagnostics now separate consecutive **Re-reads** from **revisited IDs**
+seen after a different decoded QR. These are observations, not inferred loss rates.
+At 30 camera frames/s and 6 symbols/s, multiple reads of each symbol are expected.
+Calibration optimizes accepted payload bytes/s; it does not promise zero duplicates.
 
 Leaving the foreground stops active camera/network work. Light reception journals
 validated packets privately; Scan & receive offers Resume or Start new when a

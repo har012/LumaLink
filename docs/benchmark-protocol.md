@@ -24,7 +24,7 @@ there is no measured S24 improvement or 190 KB/s claim yet.
 
 For the adaptive revision, follow optical-calibration-and-resume.md first. Compare
 manual profiles against the calibration recommendation on identical geometry.
-Measure Off / every-ID / every-10th-ID holds; count unique accepted file bytes,
+Measure Off / random-later-appearance holds; count unique accepted file bytes,
 not duplicate QR reads. Verify manifests repeat, late join waits for metadata,
 and selected FPS remains visible beside measured UI slots/s.
 

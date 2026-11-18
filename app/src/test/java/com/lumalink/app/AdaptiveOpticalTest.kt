@@ -52,22 +52,26 @@ class AdaptiveOpticalTest {
             assertArrayEquals("block=$block", sender.bytes, receiver.complete)
         }
     }
-    @Test fun pacingNeverCatchesUpAndExtraHoldAppliesOncePerSymbolId() {
-        val pacer = OpticalPacer(OpticalProfile(384, 6, 10))
+    @Test fun pacingNeverCatchesUpAfterARendererStall() {
+        val pacer = OpticalPacer(OpticalProfile(384, 6, 0))
         assertTrue(pacer.ready(0))
         pacer.presented(0, 0)
-        assertFalse(pacer.ready(499_999_999)); assertTrue(pacer.ready(500_000_000))
-        pacer.presented(500_000_000, 0) // retransmission: no second extra hold
-        assertTrue(pacer.ready(666_666_666))
+        assertFalse(pacer.ready(166_666_665)); assertTrue(pacer.ready(166_666_666))
         pacer.presented(50_000_000_000, 1) // renderer stalled for a long time
         assertFalse(pacer.ready(50_000_000_001))
         assertTrue(pacer.ready(50_166_666_666))
-        pacer.presented(51_000_000_000, 10)
-        assertFalse(pacer.ready(51_499_999_999)); assertTrue(pacer.ready(51_500_000_000))
     }
-    @Test fun everySymbolAndOffSettingsAndManifestDwell() {
-        val all = OpticalPacer(OpticalProfile(1024, 15, 1))
-        all.presented(0, 7); assertFalse(all.ready(499_999_999)); assertTrue(all.ready(500_000_000))
+    @Test fun randomHoldIsNeverFirstAndOccursExactlyOnceOnAppearanceTwoToFour() {
+        val pacer = OpticalPacer(OpticalProfile(1024, 15, 1), java.util.Random(42))
+        val targets = hashSetOf<Int>()
+        for (sequence in 0..30) {
+            val extended = (1..8).filter { pacer.dwellFor(sequence) == 500_000_000L }
+            assertEquals(1, extended.size); assertTrue(extended.single() in 2..4)
+            targets.add(extended.single())
+        }
+        assertTrue("Targets must vary", targets.size > 1)
+    }
+    @Test fun offSettingsAndManifestDwell() {
         val off = OpticalPacer(OpticalProfile(1024, 15, 0))
         off.presented(0, 0); assertTrue(off.ready(66_666_666))
         off.presented(100_000_000, -1, manifest = true)
@@ -129,7 +133,7 @@ class AdaptiveOpticalTest {
         meter.accept(OpticalCalibration.packet(run, 0, -1)); assertEquals(0, meter.count)
         repeat(20) { q -> repeat(2) { meter.accept(OpticalCalibration.packet(run, 0, q)) } }
         repeat(5) { q -> meter.accept(OpticalCalibration.packet(run, 4, q)) }
-        val result = meter.accept(OpticalCalibration.finish(run, LongArray(7) { 4000 }, 10))!!
+        val result = meter.accept(OpticalCalibration.finish(run, LongArray(7) { 4000 }, 1))!!
         assertEquals(1024, result.profile.payload); assertEquals(6, result.profile.fps)
         assertEquals(1280.0, result.bytesPerSecond, .001)
         val decoded = OpticalCalibration.recommendation(result.encode())
@@ -153,5 +157,32 @@ class AdaptiveOpticalTest {
         meter.accept(OpticalCalibration.packet(UUID.randomUUID().toString(), 6, 0))
         val result = meter.accept(OpticalCalibration.finish(run, LongArray(7) { 4000 }, 0))!!
         assertEquals(192, result.profile.payload); assertEquals(6, result.profile.fps); assertEquals(1, meter.count)
+    }
+    @Test fun randomScheduleProvidesEveryLaterHoldOpportunityAndReconstructsFile() {
+        val sender = sender(384, 4097); val receiver = Receiver()
+        receiver.accept(OpticalV4.manifest(sender))
+        val pacer = OpticalPacer(OpticalProfile(384, 6, 1), java.util.Random(17))
+        val appearances = hashMapOf<Int, Int>()
+        for (emission in 0L until 128) {
+            val q = RandomHoldSchedule.sequence(emission)
+            appearances[q] = (appearances[q] ?: 0) + 1
+            if (pacer.dwellFor(q) == 500_000_000L) receiver.accept(OpticalV4.data(sender, q))
+        }
+        assertTrue(appearances.values.all { it == 4 })
+        assertArrayEquals(sender.bytes, receiver.complete)
+    }
+    @Test fun removedTenthPolicyAndOldCalibrationCannotBeApplied() {
+        try { OpticalProfile(192, 6, 10); fail("Removed hold policy") } catch (_: IllegalArgumentException) { }
+        val old = OpticalV4.wrap("LLCR:", "{\"payload\":192,\"fps\":6,\"hold\":1,\"rate\":1000,\"policy\":1}".toByteArray())
+        try { OpticalCalibration.recommendation(old); fail("Old calibration policy") } catch (_: IllegalArgumentException) { }
+    }
+    @Test fun repeatDiagnosticsDistinguishConsecutiveRereadsFromRevisitedIds() {
+        val stats = QrRepeatStats()
+        stats.record("A", Receiver.PacketResult.ACCEPTED)
+        stats.record("A", Receiver.PacketResult.DUPLICATE)
+        stats.record("A", Receiver.PacketResult.DUPLICATE)
+        stats.record("B", Receiver.PacketResult.ACCEPTED)
+        stats.record("A", Receiver.PacketResult.DUPLICATE)
+        assertEquals(2L, stats.consecutive); assertEquals(1L, stats.revisited)
     }
 }

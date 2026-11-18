@@ -8,7 +8,8 @@ apps. Earlier in-memory progress from versions without checkpoints cannot be rec
 1. On the receiving phone: Light / QR → Calibrate optical link → Scan test QRs.
 2. On the sending phone: Light / QR → choose the longer-hold setting → Calibrate
    optical link → Show test QRs. Keep the phones positioned for normal transfer.
-3. Scan the entire roughly 35-second sequence and the final summary QR. Candidates
+3. Scan the entire sequence and the final summary QR (about 35 seconds with holds
+   off; random repeats take longer). Candidates
    are 192 bytes at 3/6 FPS, 384 at 6 FPS, and 768/1024 at 6/15 FPS. Each has a
    stationary acquisition symbol followed by moving unique symbols.
 4. The receiving phone displays the best **observed** candidate and a result QR.
@@ -27,18 +28,45 @@ No network feedback is used; the result QR is the optical return channel.
 
 ## Longer display holds
 
-Options: Off / Every new symbol once / Every 10th new symbol once. Default: every
-10th. An anchor symbol is held for at least 500 ms total (not an extra 500 ms on
-top of its normal dwell). If normal dwell is longer, it is preserved. The same
-symbol ID gets this additional dwell only on its first presentation in that run;
-scheduled source retransmissions use normal dwell. Manifests have a separate
-minimum 350 ms dwell; the initial manifest is held for at least one second.
+Options: Off / Random 2nd–4th appearance once. Default: Off. Every-10th hold is removed.
+For each ID, the sender independently draws an appearance number of 2, 3 or 4.
+Only that appearance is held for at least 500 ms total; the first appearance and
+all other appearances use normal dwell. It never selects the first appearance.
+If normal dwell is longer, it is preserved. Manifests retain a separate minimum
+350 ms dwell; the initial manifest is held for at least one second.
 
-One dwell corresponds to one UI submission, so the hold does not fabricate new
-symbols. The camera may legitimately decode it several times. There is no optical
+Random mode deliberately interleaves four appearances for each group of four
+IDs: 0,1,2,3,0,1,2,3,0,1,2,3,0,1,2,3, then the next group. This ensures each chosen
+later appearance actually occurs, including repair IDs that otherwise might only
+be sent once. Exactly one appearance is extended per ID within the bounded run.
+These intentional repeats cost capacity and are included in duration estimates and
+calibration. Off retains the normal systematic/repair schedule and avoids this
+additional four-appearance policy. Do not enable random holds to reduce duplicates.
+
+One dwell corresponds to one UI submission. Repeated presentations of an ID remain
+the same symbol, not fresh file bytes. The camera may decode it several times. There is no optical
 acknowledgement for each symbol, so no fixed hold guarantees capture. Holding every
 symbol can greatly lower throughput; calibration evaluates the selected setting.
 Manual Hold QR for focus/Resume remains available.
+
+Calibration results include hold-policy version 2. Old first-appearance/each-tenth
+recommendations are rejected, and stored old calibration rates are cleared. Update
+both apps and run a new calibration before applying results.
+
+## Duplicates and MB-sized files
+
+At 30 analyzed camera images/s and 6 changing symbols/s, five camera images can
+show the same QR. If all decode, four of those five are expected repeats, not 80%
+packet loss. Re-reads counts consecutive identical decoded data packets; revisited
+IDs counts duplicate IDs after a different decoded QR. Neither conclusively proves
+a particular sender retransmission or display presentation, so the labels do not
+claim to identify their cause. Watch unique accepted bytes/s and recovered KB/s.
+
+The review page warns explicitly for files of 1,000,000 bytes or more and offers
+Wi-Fi Direct. Continuing Light requires confirmation and retains the full duration
+estimate, including extra repeats and holds. This does not make MB-sized optical
+transfer fast or raise the 10 MB file cap. Choose Off for best throughput and
+Wi-Fi Direct for large-file use. Radio performance still needs physical testing.
 
 ## Resume a Light transfer
 

@@ -219,3 +219,24 @@ calibration deduplication/scoring and unknown-run/profile handling.
 No device or emulator was connected. Actual calibration recommendations, physical
 optical speed, long-hold capture benefits and on-device resume still need testing
 using optical-calibration-and-resume.md. No 190 KB/s or guaranteed-capture claim.
+
+## Random later holds and repeat diagnostics - 2026-11-18
+
+Extended holds now occur once per data-symbol ID on an independently chosen
+second, third or fourth appearance, never its first. This optional mode sends
+four interleaved appearances per ID so the later hold can occur. Off remains the
+throughput default. The every-10th option is removed. Calibration follows the
+same policy and rejects older policy reports; update both apps and recalibrate.
+
+Receiver diagnostics distinguish consecutive re-reads from revisited IDs. These
+are observed decoded-packet patterns, not measured packet loss. MB-sized optical
+transfers show a Wi-Fi Direct recommendation and require confirmation to proceed.
+Repeating symbols increases duration; this revision does not solve optical
+capacity limits for large files.
+
+`testDebugUnitTest lintDebug assembleDebug` passed: **52 Kotlin tests**, zero
+failures, zero lint errors and 31 warnings. New coverage checks random later
+holds, exactly one extended hold per ID, interleaved repetition and reconstruction,
+removed-policy rejection, calibration policy versioning and repeat diagnostics.
+
+Physical camera reception and phone-to-phone throughput remain unverified.

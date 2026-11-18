@@ -19,13 +19,14 @@ internal object OpticalCalibration {
     }
     fun finish(run: String, durations: LongArray, holdEvery: Int): String = OpticalV4.wrap("LLCE:",
         JSONObject().put("run", run).put("durations", org.json.JSONArray(durations.toList()))
-            .put("hold", holdEvery).toString().toByteArray(Charsets.UTF_8))
+            .put("hold", holdEvery).put("policy", 2).toString().toByteArray(Charsets.UTF_8))
     data class Recommendation(val profile: OpticalProfile, val bytesPerSecond: Double) {
         fun encode() = OpticalV4.wrap("LLCR:", JSONObject().put("payload", profile.payload).put("fps", profile.fps)
-            .put("hold", profile.holdEvery).put("rate", bytesPerSecond).toString().toByteArray(Charsets.UTF_8))
+            .put("hold", profile.holdEvery).put("policy", 2).put("rate", bytesPerSecond).toString().toByteArray(Charsets.UTF_8))
     }
     fun recommendation(raw: String): Recommendation {
         val o = JSONObject(OpticalV4.unwrap(raw, "LLCR:").toString(Charsets.UTF_8))
+        require(o.getInt("policy") == 2)
         val rate = o.getDouble("rate"); require(rate.isFinite() && rate > 0 && rate <= 1_000_000)
         return Recommendation(OpticalProfile(o.getInt("payload"), o.getInt("fps"), o.getInt("hold")), rate)
     }
@@ -45,9 +46,10 @@ internal object OpticalCalibration {
                 return null
             }
             val o = JSONObject(OpticalV4.unwrap(raw, "LLCE:").toString(Charsets.UTF_8))
+            require(o.getInt("policy") == 2)
             require(o.getString("run") == run) { "No matching calibration samples" }
             val durations = o.getJSONArray("durations"); require(durations.length() == candidates.size)
-            val hold = o.getInt("hold"); require(hold in listOf(0, 1, 10))
+            val hold = o.getInt("hold"); require(hold in listOf(0, 1))
             return candidates.indices.mapNotNull { i ->
                 val milliseconds = durations.getLong(i); require(milliseconds in 1..180_000)
                 if (seen[i].isEmpty()) null else Recommendation(OpticalProfile(candidates[i].first, candidates[i].second, hold), seen[i].size * candidates[i].first * 1000.0 / milliseconds)
