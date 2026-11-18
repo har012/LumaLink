@@ -9,17 +9,22 @@ import android.provider.MediaStore
 import androidx.annotation.RequiresApi
 import java.io.File
 import java.io.FileOutputStream
+import java.io.InputStream
 
 /** Call on an I/O executor, only after file hash verification. */
 class ReceivedFileWriter(private val context: Context) {
     fun save(bytes: ByteArray, filename: String): String {
+        return save({ bytes.inputStream() }, filename)
+    }
+    fun save(source: File, filename: String, progress: (Long) -> Unit = {}): String = save({ source.inputStream() }, filename, progress)
+    private fun save(open: () -> InputStream, filename: String, progress: (Long) -> Unit = {}): String {
         val destination = FileDestination.forName(filename)
-        return if (Build.VERSION.SDK_INT >= 29) saveMediaStore(bytes, destination)
-        else saveLegacy(bytes, destination)
+        return if (Build.VERSION.SDK_INT >= 29) saveMediaStore(open, destination, progress)
+        else saveLegacy(open, destination, progress)
     }
 
     @RequiresApi(29)
-    private fun saveMediaStore(bytes: ByteArray, file: FileDestination): String {
+    private fun saveMediaStore(open: () -> InputStream, file: FileDestination, progress: (Long) -> Unit): String {
         val resolver = context.contentResolver
         val collection = when (file.folder) {
             "Pictures" -> MediaStore.Images.Media.EXTERNAL_CONTENT_URI
@@ -35,7 +40,7 @@ class ReceivedFileWriter(private val context: Context) {
         }
         val uri = resolver.insert(collection, values) ?: error("Cannot create received file")
         try {
-            resolver.openOutputStream(uri, "w")?.use { it.write(bytes) } ?: error("Cannot write received file")
+            resolver.openOutputStream(uri, "w")?.use { out -> open().use { copy(it, out, progress) } } ?: error("Cannot write received file")
             check(resolver.update(uri, ContentValues().apply { put(MediaStore.MediaColumns.IS_PENDING, 0) }, null, null) == 1) {
                 "Cannot publish received file"
             }
@@ -50,7 +55,7 @@ class ReceivedFileWriter(private val context: Context) {
     }
 
     @Suppress("DEPRECATION")
-    private fun saveLegacy(bytes: ByteArray, destination: FileDestination): String {
+    private fun saveLegacy(open: () -> InputStream, destination: FileDestination, progress: (Long) -> Unit): String {
         check(Environment.getExternalStorageState() == Environment.MEDIA_MOUNTED) { "Shared storage is unavailable" }
         val directory = File(Environment.getExternalStoragePublicDirectory(destination.folder), "LumaLink")
         check(directory.isDirectory || directory.mkdirs()) { "Cannot create destination folder" }
@@ -65,12 +70,21 @@ class ReceivedFileWriter(private val context: Context) {
         }
         val file = target ?: error("Too many files with this name")
         try {
-            FileOutputStream(file).use { it.write(bytes); it.fd.sync() }
+            FileOutputStream(file).use { out -> open().use { copy(it, out, progress) }; out.fd.sync() }
         } catch (failure: Exception) {
             file.delete()
             throw failure
         }
         runCatching { MediaScannerConnection.scanFile(context, arrayOf(file.absolutePath), arrayOf(destination.mime), null) }
         return "${destination.folder}/LumaLink/${file.name}"
+    }
+    private fun copy(input: InputStream, output: java.io.OutputStream, progress: (Long) -> Unit) {
+        val buffer = ByteArray(32 * 1024); var copied = 0L
+        while (true) {
+            if (Thread.currentThread().isInterrupted) throw java.io.InterruptedIOException("Saving cancelled")
+            val count = input.read(buffer)
+            if (count < 0) return
+            output.write(buffer, 0, count); copied += count; progress(copied)
+        }
     }
 }

@@ -9,3 +9,4 @@ prototype/
 *.keystore
 __pycache__/
 *.pyc
+.kotlin/

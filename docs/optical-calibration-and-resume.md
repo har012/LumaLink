@@ -16,7 +16,8 @@ apps. Earlier in-memory progress from versions without checkpoints cannot be rec
 5. On the sender, choose Calibrate optical link → Scan result QR; scan the receiver's
    result and confirm Apply profile. Alternatively set the displayed values manually.
 6. Select the file. Review the estimated duration and choose Start Light transfer
-   or the explicit Wi-Fi Direct option.
+   or Back. This review page is exclusively for optical transfer; select Wi-Fi
+   Direct separately on the home screen.
 
 The score deduplicates sequence IDs and divides accepted test-payload bytes by
 actual sender UI-stage duration, including encoder stalls and the selected extra
@@ -62,8 +63,8 @@ IDs counts duplicate IDs after a different decoded QR. Neither conclusively prov
 a particular sender retransmission or display presentation, so the labels do not
 claim to identify their cause. Watch unique accepted bytes/s and recovered KB/s.
 
-The review page warns explicitly for files of 1,000,000 bytes or more and offers
-Wi-Fi Direct. Continuing Light requires confirmation and retains the full duration
+The review page warns explicitly for files of 1,000,000 bytes or more.
+Continuing Light requires confirmation and retains the full duration
 estimate, including extra repeats and holds. This does not make MB-sized optical
 transfer fast or raise the 10 MB file cap. Choose Off for best throughput and
 Wi-Fi Direct for large-file use. Radio performance still needs physical testing.

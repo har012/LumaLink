@@ -20,6 +20,9 @@ internal object DirectProtocol {
         require(MessageDigest.isEqual(expected, actual)) { "Wi-Fi session authentication failed" }
     }
     fun write(output: DataOutputStream, key: ByteArray, id: String, index: Int, bytes: ByteArray) {
+        write(output, key, id, index.toLong(), bytes)
+    }
+    fun write(output: DataOutputStream, key: ByteArray, id: String, index: Long, bytes: ByteArray) {
         require(bytes.size <= CHUNK)
         val nonce = random(12)
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
@@ -29,6 +32,9 @@ internal object DirectProtocol {
         output.writeInt(encrypted.size); output.write(nonce); output.write(encrypted); output.flush()
     }
     fun read(input: DataInputStream, key: ByteArray, id: String, index: Int): ByteArray {
+        return read(input, key, id, index.toLong())
+    }
+    fun read(input: DataInputStream, key: ByteArray, id: String, index: Long): ByteArray {
         val length = input.readInt()
         require(length in 16..CHUNK + 16) { "Invalid encrypted record size" }
         val nonce = ByteArray(12).also { input.readFully(it) }

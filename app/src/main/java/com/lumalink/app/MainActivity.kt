@@ -87,6 +87,10 @@ class MainActivity : ComponentActivity() {
     private var verifiedSpeed: String? = null
     private var wifiMode = false
     private var direct: WifiDirectTransfer? = null
+    private var selectedDirectPeer: SavedDirectPeer? = null
+    private var pickingDirect = false
+    private var preparingDirect = false
+    private val directProfiles by lazy { DirectPeerStore.get(this) }
     private var permissionAction: (() -> Unit)? = null
     private val directPermissions = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { grants ->
         val action = permissionAction; permissionAction = null
@@ -103,6 +107,7 @@ class MainActivity : ComponentActivity() {
         val required = mutableListOf(if (android.os.Build.VERSION.SDK_INT >= 33) Manifest.permission.NEARBY_WIFI_DEVICES else Manifest.permission.ACCESS_FINE_LOCATION)
         if (android.os.Build.VERSION.SDK_INT <= 32) required.add(Manifest.permission.ACCESS_COARSE_LOCATION)
         if (receiving) required.add(Manifest.permission.CAMERA)
+        if (receiving && android.os.Build.VERSION.SDK_INT <= 28) required.add(Manifest.permission.WRITE_EXTERNAL_STORAGE)
         val missing = required.filter { ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED }
         if (missing.isEmpty()) action() else { permissionAction = action; directPermissions.launch(missing.toTypedArray()) }
     }
@@ -146,33 +151,55 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
+    private fun chooseFile() {
+        pickingDirect = wifiMode
+        pick.launch("*/*")
+    }
     private val pick = registerForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        pickingDirect = false
         if (uri != null) {
-            layout(); title("Reading file..."); button("CANCEL") { home() }
+            val isDirect = wifiMode
+            preparingDirect = isDirect && direct != null
+            layout(preserveDirect = preparingDirect); title("Preparing file..."); button("CANCEL") { home() }
             val token = session
             work = worker.submit {
+                var source: DirectSource? = null
                 val result = runCatching {
                     val name = contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
                         if (c.moveToFirst()) c.getString(0) else "file.bin"
                     } ?: "file.bin"
-                    val data = contentResolver.openInputStream(uri)?.use { input ->
-                        val output = java.io.ByteArrayOutputStream()
-                        val buffer = ByteArray(8192)
-                        while (true) {
-                            if (Thread.currentThread().isInterrupted) throw InterruptedException()
-                            val n = input.read(buffer)
-                            if (n < 0) break
-                            require(output.size() + n <= Codec.MAX_BYTES) { "Maximum file size is 10 MB" }
-                            output.write(buffer, 0, n)
+                    contentResolver.openInputStream(uri)?.use { input ->
+                        if (isDirect) {
+                            source = DirectSource.prepare(input, name, cacheDir)
+                            null
+                        } else {
+                            val output = java.io.ByteArrayOutputStream()
+                            val buffer = ByteArray(8192)
+                            while (true) {
+                                if (Thread.currentThread().isInterrupted) throw InterruptedException()
+                                val n = input.read(buffer)
+                                if (n < 0) break
+                                require(output.size() + n <= Codec.MAX_BYTES) { "Light / QR maximum file size is 10 MB" }
+                                output.write(buffer, 0, n)
+                            }
+                            val data = output.toByteArray()
+                            Sender(name, data, selectedPayload, OpticalV4.sessionId(name, Codec.hash(data), selectedPayload))
                         }
-                        output.toByteArray()
-                    } ?: error("Cannot read file")
-                    if (wifiMode) Sender(name, data) else Sender(name, data, selectedPayload,
-                        OpticalV4.sessionId(name, Codec.hash(data), selectedPayload))
+                    } ?: if (source != null) null else error("Cannot read file")
                 }
                 main.post {
-                    if (token != session) return@post
-                    result.fold({ if (wifiMode) sendDirect(it) else reviewOptical(it) }, { toast(it.message ?: "Read failed"); home() })
+                    if (token != session) { source?.close(); return@post }
+                    preparingDirect = false
+                    if (result.isSuccess) {
+                        if (isDirect) {
+                            val prepared = source ?: return@post
+                            val transfer = direct
+                            if (transfer != null) {
+                                showDirectWaiting("Sending ${prepared.offer.name}")
+                                runCatching { transfer.sendMore(prepared) }.onFailure { prepared.close(); receiveError("Cannot send file", it as? Exception ?: Exception(it)) }
+                            } else sendDirect(prepared)
+                        } else result.getOrNull()?.let { reviewOptical(it) }
+                    } else { source?.close(); toast(result.exceptionOrNull()?.message ?: "Read failed"); home() }
                 }
             }
         }
@@ -188,6 +215,10 @@ class MainActivity : ComponentActivity() {
     private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        worker.submit {
+            cacheDir.listFiles()?.filter { it.isFile && (it.name.startsWith("direct-in-") || it.name.startsWith("direct-out-")) }
+                ?.forEach { it.delete() }
+        }
         val saved = getPreferences(MODE_PRIVATE)
         val migratedHold = saved.getInt("holdEvery", 0).takeIf { it in 0..1 } ?: 0
         runCatching { OpticalProfile(saved.getInt("payload", 192), saved.getInt("fps", 3), migratedHold) }.getOrNull()?.let {
@@ -204,6 +235,7 @@ class MainActivity : ComponentActivity() {
     private fun stop() {
         session++
         direct?.close(); direct = null
+        pickingDirect = false; preparingDirect = false
         work?.cancel(true); work = null
         frameCallback?.let { Choreographer.getInstance().removeFrameCallback(it) }; frameCallback = null
         analyzer?.clearAnalyzer(); analyzer = null
@@ -211,8 +243,8 @@ class MainActivity : ComponentActivity() {
         window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         window.attributes = window.attributes.apply { screenBrightness = WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE }
     }
-    private fun layout(scrollable: Boolean = false) {
-        stop()
+    private fun layout(scrollable: Boolean = false, preserveDirect: Boolean = false) {
+        if (!preserveDirect) stop()
         root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             if (!scrollable) setBackgroundColor(paper)
@@ -324,13 +356,14 @@ class MainActivity : ComponentActivity() {
         root.addView(label(if (wifiMode) "Direct Wi-Fi connection. No router or internet required. Keep both apps open." else "Camera-only file data. No network connection required.", 12f, muted))
         gap(16)
         actionCard("Send file", if (wifiMode) "01  /  Create a direct Wi-Fi offer" else "01  /  Turn your screen into a sender", false) {
-            if (wifiMode) withDirectPermission(false) { pick.launch("*/*") } else pick.launch("*/*")
+            if (wifiMode) withDirectPermission(false) { selectedDirectPeer = null; chooseFile() } else chooseFile()
         }
         actionCard("Scan & receive", "02  /  Capture, verify, save automatically", true) {
             if (wifiMode) withDirectPermission(true) { receive() }
             else if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) receive()
             else permission.launch(Manifest.permission.CAMERA)
         }
+        if (wifiMode) button("Saved devices") { savedDirectDevices() }
         if (!wifiMode) {
         button("Calibrate optical link") { calibrationMenu() }
         root.addView(label("PAYLOAD PER SYMBOL", 11f, muted, true))
@@ -406,20 +439,19 @@ class MainActivity : ComponentActivity() {
         root.addView(label("${sender.name}\n${sender.bytes.size} bytes · ${sender.count} source blocks\n${sender.blockSize} bytes/symbol · $requestedFps FPS requested", 17f))
         gap(16)
         if (sender.bytes.size >= 1_000_000) {
-            root.addView(label("MB-sized file: Wi-Fi Direct recommended", 20f, mint, true))
+            root.addView(label("Large optical transfer: allow extra time", 20f, mint, true))
             root.addView(label("Optical transfer still needs thousands of captures. Calibration and random holds cannot remove this capacity limit; holds may make it slower.", 14f, muted))
         }
         root.addView(label(opticalProfile().estimate(sender.bytes.size), 15f, muted))
         calibratedRate?.let { root.addView(label("At calibration's accepted-payload rate: at least %.1f min; repeats/repairs may add time.".format(java.util.Locale.US, sender.bytes.size / it / 60), 14f, muted)) }
-        root.addView(label("For large files, Wi-Fi Direct avoids holding the camera for long periods. Resume requires the same file name, contents and payload size on the sender.", 14f, muted))
+        root.addView(label("Resume requires the same file name, contents and payload size on the sender.", 14f, muted))
         button(if (sender.bytes.size >= 1_000_000) "Continue with slow Light transfer" else "Start Light transfer") {
             if (sender.bytes.size >= 1_000_000) android.app.AlertDialog.Builder(this)
                 .setTitle("Continue with optical transfer?")
-                .setMessage(opticalProfile().estimate(sender.bytes.size) + "\nWi-Fi Direct is recommended for this file size.")
+                .setMessage(opticalProfile().estimate(sender.bytes.size))
                 .setPositiveButton("Continue Light") { _, _ -> send(sender) }.setNegativeButton("Cancel", null).show()
             else send(sender)
         }
-        button("Use Wi-Fi Direct instead") { wifiMode = true; withDirectPermission(false) { sendDirect(sender) } }
         button("Back") { home() }
     }
     private fun renderQr(text: String): Bitmap {
@@ -770,45 +802,65 @@ class MainActivity : ComponentActivity() {
             true
         }
     }
-    private fun sendDirect(sender: Sender) {
+    private var directStatus: TextView? = null
+    private fun newDirect(token: Long): WifiDirectTransfer = WifiDirectTransfer(this,
+        { if (token == session) directStatus?.text = it },
+        { if (token == session) receiveError("Wi-Fi Direct failed", it) },
+        { error, retry -> if (token == session) {
+            android.app.AlertDialog.Builder(this).setTitle("Transfer interrupted")
+                .setMessage("Two automatic retries were unsuccessful. Retry again or cancel sending?\n${error.message}")
+                .setCancelable(false).setPositiveButton("Retry again") { _, _ -> retry() }
+                .setNegativeButton("Cancel send") { _, _ -> home() }.show()
+        } },
+        { peer, offer, reply -> if (token == session) {
+            android.app.AlertDialog.Builder(this).setTitle("Receive from ${peer.name}?")
+                .setMessage("${offer.name}\n${offer.size} bytes\nThe verified file will save automatically.")
+                .setCancelable(false).setPositiveButton("Receive") { _, _ -> reply(true) }
+                .setNegativeButton("Decline") { _, _ -> reply(false) }.show()
+        } else reply(false) },
+        { offer, path, speed -> if (token == session && !pickingDirect && !preparingDirect) {
+            layout(preserveDirect = true); title("File saved and verified")
+            root.addView(label("${offer.name}\nSaved to $path\n$speed", 15f, muted))
+            directStatus = label("Connection stays open. Waiting for the sender's next file...", 14f, muted).also { root.addView(it) }
+            button("Disconnect and go home") { home() }
+        } })
+    private fun showDirectWaiting(message: String) {
+        layout(preserveDirect = true); title("Wi-Fi Direct")
+        directStatus = label(message, 15f, muted).also { root.addView(it) }
+        button("Cancel transfer") { home() }
+    }
+    private fun sendDirect(source: DirectSource) {
         layout(); window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         val token = session
-        title("Wi-Fi Direct · Send")
+        title("Wi-Fi Direct - Send")
         val qr = ImageView(this).apply { setBackgroundColor(Color.WHITE); scaleType = ImageView.ScaleType.FIT_CENTER }
         root.addView(qr, LinearLayout.LayoutParams(-1, 0, 1f))
-        val status = label("Creating offer…", 14f, muted); root.addView(status)
+        val status = label("Creating offer...", 14f, muted); root.addView(status); directStatus = status
         button("Cancel transfer") { home() }
         try {
-            val transfer = WifiDirectTransfer(this, { if (token == session) status.text = it }, { if (token == session) receiveError("Wi-Fi Direct failed", it) })
-            direct = transfer
-            transfer.send(sender, { text, owner ->
-                if (token != session) return@send
-                status.text = "On the receiver, select Wi-Fi Direct and scan this QR.\nSender device: $owner\n${sender.name} · ${sender.bytes.size} bytes\nOnly share this QR with the intended receiver."
-                work = worker.submit {
-                    val encoded = runCatching {
-                        val matrix = QRCodeWriter().encode(text, BarcodeFormat.QR_CODE, 0, 0, mapOf(EncodeHintType.MARGIN to 4, EncodeHintType.CHARACTER_SET to "UTF-8"))
-                        val pixels = IntArray(matrix.width * matrix.height) { i -> if (matrix[i % matrix.width, i / matrix.width]) Color.BLACK else Color.WHITE }
-                        Bitmap.createBitmap(pixels, matrix.width, matrix.height, Bitmap.Config.ARGB_8888)
-                    }
-                    main.post {
-                        if (token != session) return@post
-                        encoded.fold({ qr.setImageDrawable(android.graphics.drawable.BitmapDrawable(resources, it).apply { isFilterBitmap = false }) }, { receiveError("Cannot display Wi-Fi offer", it as? Exception ?: Exception(it)) })
-                    }
-                }
-            }, {
+            val transfer = newDirect(token); direct = transfer
+            transfer.send(source, selectedDirectPeer, { text, owner ->
                 if (token == session) {
-                    layout(); title("Receiver verified the file")
-                    root.addView(label("${sender.name} transferred over Wi-Fi Direct. The receiver will save it automatically."))
-                    button("Home") { home() }
+                    status.text = if (selectedDirectPeer == null) "On the receiver select Wi-Fi Direct and scan this QR.\nSender: $owner\n${source.offer.name} - ${source.offer.size} bytes\nOnly share this QR with the intended receiver."
+                    else "Waiting for ${selectedDirectPeer!!.identity.name}. On that phone choose Saved devices, then Receive from this device.\nQR scanning is also available."
+                    work = worker.submit {
+                        val encoded = runCatching { renderQr(text) }
+                        main.post { if (token == session) encoded.fold({ qr.setImageDrawable(android.graphics.drawable.BitmapDrawable(resources, it).apply { isFilterBitmap = false }) }, { receiveError("Cannot display Wi-Fi offer", it as? Exception ?: Exception(it)) }) }
+                    }
                 }
-            })
-        } catch (e: Exception) { receiveError("Wi-Fi Direct unavailable", e) }
+            }, { offer -> if (token == session && !pickingDirect && !preparingDirect) {
+                layout(preserveDirect = true); title("File delivered and saved")
+                root.addView(label("${offer.name} was verified and saved by the receiver. Use Saved devices on both phones to reconnect next time."))
+                directStatus = label("Do you want to send more? The connection is still open.", 15f, muted).also { root.addView(it) }
+                button("Send more files") { chooseFile() }
+                button("Disconnect and go home") { home() }
+            } })
+        } catch (e: Exception) { source.close(); receiveError("Wi-Fi Direct unavailable", e) }
     }
     private fun confirmDirect(invite: DirectInvitation) {
         layout(); title("Receive over Wi-Fi Direct?")
         root.addView(label("${invite.name}\n${invite.size} bytes\nSender: ${invite.owner}", 17f))
-        gap(16)
-        root.addView(label("Confirm the sender, then select their device from the nearby list. Android may ask to approve the connection.", 14f, muted))
+        root.addView(label("Select the sender nearby, then approve the authenticated file offer. Successful transfers save a device profile on both phones.", 14f, muted))
         button("Connect and receive") { discoverDirect(invite) }
         button("Cancel") { home() }
     }
@@ -816,33 +868,60 @@ class MainActivity : ComponentActivity() {
         layout(); window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         val token = session
         title("Find the sender")
-        val status = label("Looking for ${invite.owner}…\nEnable Wi-Fi and Location for peer discovery if required by your phone.", 14f, muted)
-        root.addView(status)
+        directStatus = label("Looking for ${invite.owner}...", 14f, muted).also { root.addView(it) }
         val peers = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        root.addView(ScrollView(this).apply {
-            isVerticalScrollBarEnabled = false
-            isHorizontalScrollBarEnabled = false
-            addView(peers)
-        }, LinearLayout.LayoutParams(-1, 0, 1f))
+        root.addView(ScrollView(this).apply { isVerticalScrollBarEnabled = false; addView(peers) }, LinearLayout.LayoutParams(-1, 0, 1f))
         button("Cancel transfer") { home() }
         try {
-            val transfer = WifiDirectTransfer(this, { if (token == session) status.text = it }, { if (token == session) receiveError("Wi-Fi Direct failed", it) })
-            direct = transfer
-            transfer.discover(invite, { devices ->
-                if (token == session) {
-                    peers.removeAllViews()
-                    devices.forEach { device ->
-                        peers.addView(Button(this).apply {
-                            text = device.deviceName.ifBlank { "Nearby Wi-Fi device" }; isAllCaps = false
-                            setOnClickListener { peers.removeAllViews(); transfer.connect(device) }
-                        }, LinearLayout.LayoutParams(-1, dp(60)))
-                    }
-                    if (devices.isEmpty()) status.text = "No peers yet. Keep the sender's offer open and both phones nearby."
+            val transfer = newDirect(token); direct = transfer
+            transfer.discover(invite) { devices -> if (token == session) {
+                peers.removeAllViews()
+                devices.forEach { device ->
+                    peers.addView(Button(this).apply {
+                        text = device.deviceName.ifBlank { "Nearby Wi-Fi device" }; isAllCaps = false
+                        setOnClickListener { peers.removeAllViews(); transfer.connect(device) }
+                    }, LinearLayout.LayoutParams(-1, dp(60)))
                 }
-            }, { bytes, name, speed ->
-                if (token == session) { verifiedSpeed = speed; requestSave(bytes, name) }
-            })
+                if (devices.isEmpty()) directStatus?.text = "No peers yet. Keep the sender's offer open and both phones nearby."
+            } }
         } catch (e: Exception) { receiveError("Wi-Fi Direct unavailable", e) }
+    }
+    private fun savedDirectDevices() {
+        layout(scrollable = true); title("Saved Wi-Fi devices")
+        root.addView(label("Keep both apps open. Sender: select a device and file. Receiver: select Receive from that device. No repeat QR scan is needed; Android may still ask to approve the connection.", 14f, muted))
+        try {
+            val profiles = directProfiles.list()
+            if (profiles.isEmpty()) root.addView(label("No saved devices yet. Complete one QR-authorized Wi-Fi Direct transfer first."))
+            profiles.forEach { peer ->
+                gap(16); root.addView(label(peer.identity.name, 19f, mint, true))
+                root.addView(label("Device ${peer.identity.id.takeLast(8)}", 12f, muted))
+                button("Send file to ${peer.identity.name}") {
+                    withDirectPermission(false) { selectedDirectPeer = peer; chooseFile() }
+                }
+                button("Receive from ${peer.identity.name}") {
+                    withDirectPermission(false) {
+                        if (android.os.Build.VERSION.SDK_INT <= 28 && ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
+                            permissionAction = { receiveSaved(peer) }; directPermissions.launch(arrayOf(Manifest.permission.WRITE_EXTERNAL_STORAGE))
+                        } else receiveSaved(peer)
+                    }
+                }
+                button("Forget device") {
+                    android.app.AlertDialog.Builder(this).setTitle("Forget ${peer.identity.name}?")
+                        .setMessage("This phone will no longer reconnect using its saved credential. To remove trust on both phones, forget the profile on each phone.")
+                        .setPositiveButton("Forget") { _, _ -> directProfiles.forget(peer.identity.id); savedDirectDevices() }.setNegativeButton("Cancel", null).show()
+                }
+            }
+        } catch (e: Exception) { root.addView(label("Cannot load saved profiles: ${e.message}")) }
+        button("Back") { home() }
+    }
+    private fun receiveSaved(peer: SavedDirectPeer) {
+        layout(); window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        val token = session
+        title("Receive from ${peer.identity.name}")
+        directStatus = label("Looking for the saved device...", 15f, muted).also { root.addView(it) }
+        button("Cancel") { home() }
+        try { direct = newDirect(token).also { it.discoverSaved(peer) } }
+        catch (e: Exception) { receiveError("Cannot reconnect", e) }
     }
     private fun receiveError(heading: String, error: Exception) {
         layout(); title(heading)
@@ -852,6 +931,6 @@ class MainActivity : ComponentActivity() {
         if (!wifiMode) button("Try receiving again") { receive() }
         button("Back to home") { home() }
     }
-    override fun onStop() { stop(); super.onStop() }
+    override fun onStop() { if (!(pickingDirect && direct != null)) stop(); super.onStop() }
     override fun onDestroy() { stop(); worker.shutdownNow(); cameraExecutor.shutdownNow(); saveExecutor.shutdown(); super.onDestroy() }
 }

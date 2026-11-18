@@ -43,9 +43,19 @@ class DirectProtocolTest {
         val invite = DirectInvitation("session-one", key, 9999, "Phone", "file.bin", 420, "0".repeat(64))
         val decoded = DirectInvitation.parse(invite.encode())
         assertEquals(invite.name, decoded.name); assertArrayEquals(key, decoded.key)
-        rejects { DirectInvitation.parse(invite.copy(size = Codec.MAX_BYTES + 1).encode()) }
+        assertEquals(5_000_000_000L, DirectInvitation.parse(invite.copy(size = 5_000_000_000L).encode()).size)
+        rejects { DirectInvitation.parse(invite.copy(size = 0).encode()) }
+        rejects { DirectInvitation.parse(invite.copy(size = -1).encode()) }
+        rejects { DirectInvitation.parse(invite.encode().replace("\"size\":420", "\"size\":1.5")) }
         rejects { DirectInvitation.parse(invite.copy(port = 0).encode()) }
         rejects { DirectInvitation.parse(invite.copy(key = ByteArray(1)).encode()) }
         rejects { DirectInvitation.parse("x".repeat(2049)) }
+    }
+    @Test fun recordIndicesSupportMoreThanIntRange() {
+        val output = ByteArrayOutputStream()
+        val index = Int.MAX_VALUE.toLong() + 100
+        DirectProtocol.write(DataOutputStream(output), key, "large-file", index, byteArrayOf(1, 2))
+        assertArrayEquals(byteArrayOf(1, 2), DirectProtocol.read(DataInputStream(ByteArrayInputStream(output.toByteArray())), key, "large-file", index))
+        rejects { DirectProtocol.read(DataInputStream(ByteArrayInputStream(output.toByteArray())), key, "large-file", index - 1) }
     }
 }

@@ -30,7 +30,7 @@ These are intended applications, not deployment or reliability guarantees.
 | Share short notes, contact files or small documents without a radio connection | Light / QR | Both phones need LumaLink; the complete QR must remain visible. |
 | Move a small file where a network connection is unavailable or intentionally avoided | Light / QR | Camera/display use must be permitted; optical contents are visible and unencrypted. |
 | Teach visual encoding, packet integrity, fountain recovery and camera processing | Light / QR | Diagnostics and calibration make throughput/readability trade-offs observable. |
-| Share photos, PDFs or other larger files nearby without internet or a shared router | Wi-Fi Direct | Intended use pending physical-device validation; current file cap is 10 MB. |
+| Share photos, PDFs or other larger files nearby without internet or a shared router | Wi-Fi Direct | Intended use pending physical-device validation; no app-imposed Wi-Fi size cap, subject to available storage. |
 | Compare optical and local wireless transport in an Android research prototype | Both | Measure setup time, verified throughput, failure rate and usability separately. |
 
 ## Transfer modes and requirements
@@ -121,8 +121,8 @@ calibration estimate. Recalibrate when phones, distance or lighting change.
 Before transmission the app displays file size, source block count and a no-loss
 first-pass display estimate including manifests and holds. A calibration-based
 estimate is shown when available, with repair/repeat caveats. The review screen
-offers Wi-Fi Direct explicitly for large files; no automatic network fallback occurs.
-Files of 1 MB or more additionally show a prominent Wi-Fi Direct recommendation
+keeps optical sending within Light mode; it offers Continue Light and Back only.
+Files of 1 MB or more additionally show a prominent optical-duration warning
 and require explicit confirmation before continuing with slow optical transfer.
 See [calibration, hold and resume instructions](docs/optical-calibration-and-resume.md).
 
@@ -163,31 +163,64 @@ This uses Android Wi-Fi P2P, not a shared-router LAN or Wi-Fi hotspot workaround
 1. Install this revision on both physical Android phones. Select **Wi-Fi Direct** on both.
 2. Enable Wi-Fi and grant the requested permissions. Peer discovery may also need
    the system Location switch enabled; Android 8–12 needs precise Location permission.
-3. Sender: tap Send file and choose a local file up to 10 MB. The app creates a P2P
+3. Sender: tap Send file and choose a local nonempty file. There is no app-imposed
+   Wi-Fi size cap; preparation and reception require sufficient temporary storage. The app creates a P2P
    group and displays an authorization QR with the sender's device name.
 4. Receiver: tap Scan & receive, scan that QR and confirm the displayed file.
 5. Select the sender's device name from the nearby list. Accept Android connection
    prompts if shown. You do not need both phones on the same router.
 6. The file transfers as encrypted TCP records; progress and KB/s appear on screen.
    SHA-256 verification precedes automatic saving. The sender receives a verification
-   acknowledgement, which confirms reconstruction, not that the subsequent disk save succeeded.
+   acknowledgement only after successful SHA-256 verification and automatic saving.
+7. Sender: choose **Send more files** to reuse the authenticated connection and P2P
+   group, or disconnect. The receiver stays on a waiting screen and approves each
+   new offer; neither phone needs another authorization scan for that session.
 
-The QR carries a fresh random 256-bit session key, session ID, TCP port, filename,
-size and file hash. A random challenge/HMAC authenticates the receiver to the sender;
-AES-256-GCM authenticates/encrypts each ordered record with session/index binding.
-The receiver uses Android's P2P group-owner address, never an arbitrary QR URL.
-Anyone who sees the authorization QR can possess that session key: share it only
-with the intended receiver. This is a PSK protocol, not TLS or certificate identity.
+Wi-Fi transport v2 is incompatible with the old Wi-Fi stream: update both phones.
+The first authorization QR carries a random 256-bit pairing secret, a session ID,
+TCP port and the initial file metadata. The file offer on the encrypted stream is
+what the receiver approves. Both endpoints authenticate with nonce-bound HMAC;
+fresh directional AES-256-GCM record keys are derived for each TCP connection.
+Authenticated device IDs and ordered 64-bit record indices bind the stream.
+Anyone who sees the authorization QR can obtain its shared secret; this remains a
+PSK protocol, not TLS or certificate identity. Do not expose the QR to others.
 
-Offers/connections have a three-minute session deadline and bounded socket timeouts.
-Cancel/backgrounding closes sockets, stops discovery and removes app-created P2P groups.
-Existing P2P groups are rejected rather than silently disconnected. Unsupported
-devices can still use Light mode. Standard Android emulators generally cannot
-validate Wi-Fi Direct: test on two physical P2P-capable phones.
+After a successful transfer, both phones retain each other's profile and pairing
+secret, encrypted by Android Keystore in storage excluded from backup. Open
+**Saved devices** in Wi-Fi mode: the sender chooses **Send file to [device]** and
+the receiver chooses **Receive from [device]**. DNS-SD discovers the current P2P
+service; authentication checks the saved device ID and secret, not just a name or
+Wi-Fi address. Another QR scan is unnecessary. Both apps must be open and nearby;
+Android connection prompts/permissions may still be necessary. Forget device is
+local: remove the profile on both phones to remove trust on both sides. Clearing
+app data or reinstalling requires pairing again.
 
-Wi-Fi Direct radio discovery, negotiation and real speed are **not yet device-validated**.
-JVM loopback tests exercise the encrypted file stream, including a 2 MB file, but
-do not establish Wi-Fi throughput or guarantee 190 KB/s. The file-size cap remains 10 MB.
+Wi-Fi files use 64-bit lengths and disk-backed 32 KB streaming, with no 10 MB
+application cap or whole-file memory allocation. The sender prepares a stable
+private temporary snapshot for retries. The receiver verifies a temporary file
+before copying it into the type-specific public folder. Available storage and
+filesystem/provider limits still apply; reception may need room for both the
+complete temporary file and its final saved copy. The optical 10 MB cap remains.
+Temporary files are removed on completion/cancellation; startup clears orphaned
+Wi-Fi temporary files from a previous process.
+
+Interrupted socket transfers get **two automatic sender retries**, restarting the
+current file from byte zero. After those attempts the sender chooses **Retry
+again** or **Cancel send**. The receiver reconnects and waits for that decision.
+In-session saved-file receipts prevent a lost final acknowledgement from saving
+the same transfer twice; these receipts do not survive process death. This is
+retry/restart, not persistent Wi-Fi byte-offset resume. Total P2P group/radio loss
+may need reconnecting from Saved devices. There is a three-minute setup deadline,
+but no fixed total deadline for an active large-file transfer; idle and save-copy
+heartbeats keep the session responsive. Foreground operation is required.
+Cancel/backgrounding closes sockets, stops discovery and removes app-created P2P
+groups. The document picker temporarily preserves an existing session for Send
+more. Unrelated pre-existing P2P groups are rejected rather than removed.
+
+Wi-Fi Direct radio discovery, saved-device reconnection, negotiation and real speed
+are **not yet device-validated**. JVM loopback tests cover streaming files above
+10 MB, repeated files on one connection, interruption/restart and lost save ACKs;
+they do not establish Wi-Fi throughput or guarantee 190 KB/s.
 See [Wi-Fi Direct validation](docs/wifi-direct-validation.md).
 
 ## Improvements over the supplied prototype
@@ -356,7 +389,7 @@ python tools/optical_lab.py capacity
 See [the validation protocol](docs/benchmark-protocol.md) for regression coverage,
 physical-device checks, offline verification and end-to-end throughput gates.
 [Local validation results](docs/validation-results.md): the latest implementation
-revision passed 52 Kotlin tests, a debug build and lint with zero errors and 31
+revision passed 59 Kotlin tests, a debug build and lint with zero errors and 28
 warnings. These software checks do not establish physical-phone throughput.
 See [implementation status](docs/implementation-plan.md) for audit-to-file mapping
 and remaining priorities.

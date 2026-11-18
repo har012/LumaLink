@@ -240,3 +240,37 @@ holds, exactly one extended hold per ID, interleaved repetition and reconstructi
 removed-policy rejection, calibration policy versioning and repeat diagnostics.
 
 Physical camera reception and phone-to-phone throughput remain unverified.
+
+## Wi-Fi streaming, saved peers, session reuse and retry - 2026-11-19
+
+Android version 0.2 (version code 2) introduces Wi-Fi transport v2; update both
+phones. Wi-Fi preparation, transfer, verification and saving use disk-backed
+streaming with 64-bit file lengths. The Wi-Fi 10 MB application cap is removed;
+Light / QR retains its existing 10,000,000-byte cap. Storage/provider limits remain.
+The optical review now offers only Continue Light and Back.
+
+Successful Wi-Fi transfers store authenticated device profiles and PSK credentials
+on each phone, encrypted by Android Keystore in no-backup storage. Saved-device
+reconnection uses P2P DNS-SD and verifies the stored device ID and secret. It still
+requires both foreground apps and Android permissions/connection negotiation.
+The current P2P group and authenticated stream stay open for Send more files;
+the receiver approves each new offer. File selection preserves that connection.
+
+Two automatic sender retries precede Retry again / Cancel send. Interrupted files
+restart from byte zero; no persistent byte-offset resume is claimed. Socket/group
+loss and stalled writes trigger recovery, but total radio/group failure can need
+manual reconnection. Active transfers have no fixed total duration limit. The
+sender's success requires a verified-and-saved receiver acknowledgement. Bounded
+in-session receipts suppress duplicate saves when the final ACK is lost.
+
+`testDebugUnitTest lintDebug assembleDebug` passed: **59 Kotlin tests**, zero
+failures, zero lint errors and 28 warnings. New/revised loopback tests exercise
+12,000,123-byte streaming, multiple files on one connection, mid-file interruption,
+lost save ACK and retry deduplication, declined offers followed by another file,
+incorrect hashes, invalid authentication, saved-device ID mismatch, 64-bit size
+and record-index handling, bounded retry decisions and preparation cleanup.
+
+No device or emulator was connected. Android Keystore persistence, DNS-SD peer
+discovery, P2P radio negotiation, large-file heap/storage behavior, document-picker
+session preservation and physical interruption recovery still require the gates
+in wifi-direct-validation.md. JVM sockets do not establish Wi-Fi throughput.
